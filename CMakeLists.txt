@@ -48,3 +48,10 @@ endfunction()
 # Добавим подпроекты
 add_subdirectory(plugin)
 add_subdirectory(test)
+
+# Добавим команду для локального тестирования сайта
+add_custom_target(serve-docs
+    COMMAND bundle exec jekyll serve --source docs --destination docs/_site --incremental --host 127.0.0.1 --port 4000
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    COMMENT "Запуск локального сервера Jekyll для документации"
+)
