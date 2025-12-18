@@ -3,6 +3,8 @@ memsafe_unittest
 TEMP
 doxygen/*
 output/*
+docs/_site
+docs/Gemfile.lock
 **/*.pt
 **/Makefile
 contrib/*

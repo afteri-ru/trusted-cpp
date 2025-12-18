@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en" }}">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ page.title }} - {{ site.title }}</title>
+    <link rel="stylesheet" href="/assets/css/style.css">
+  </head>
+  <body>
+    <header>
+      <div class="container">
+        <h1>{{ site.title }}</h1>
+        <nav>
+          <ul>
+            {% if page.lang == "en" %}
+              <li><a href="/">Home</a></li>
+              <li><a href="/concept">Concept</a></li>
+              <li><a href="/examples">Examples</a></li>
+              <li><a href="/installation">Installation</a></li>
+              <li><a href="/ru/">Русский</a></li>
+            {% else %}
+              <li><a href="/ru/">Главная</a></li>
+              <li><a href="/ru/concept">Концепция</a></li>
+              <li><a href="/ru/examples">Примеры</a></li>
+              <li><a href="/ru/installation">Установка</a></li>
+              <li><a href="/">English</a></li>
+            {% endif %}
+          </ul>
+        </nav>
+      </div>
+    </header>
+    <main>
+      <div class="container">
+        {{ content }}
+      </div>
+    </main>
+    <footer>
+      <div class="container">
+        <p>&copy; {{ 'now' | date: "%Y" }} Trusted-CPP Project. All rights reserved.</p>
+      </div>
+    </footer>
+  </body>
+</html>

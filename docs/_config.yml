@@ -1,3 +1,54 @@
-remote_theme: pages-themes/cayman@v0.2.0
+# Welcome to Jekyll!
+#
+# This config file is meant for settings that affect your whole blog, values
+# which you are expected to set up once and rarely edit after that.
+
+title: Trusted-CPP Documentation
+email: 
+description: >-
+  Safe software development for C++ at the source code level.
+  Безопасная разработка программ на C++ на уровне исходного кода.
+baseurl: ""
+url: "https://trusted-cpp.org"
+
+# Build settings
+markdown: kramdown
+theme: minima
 plugins:
-  - jekyll-remote-theme
+  - jekyll-feed
+  - jekyll-sitemap
+  - jekyll-seo-tag
+
+# Collections for multilingual documentation
+collections:
+  russian_docs:
+    output: true
+    permalink: /ru/:path/
+
+# Exclude from processing.
+exclude:
+  - .sass-cache/
+  - .jekyll-cache/
+  - gemfiles/
+  - Gemfile
+  - Gemfile.lock
+  - node_modules/
+  - vendor/bundle/
+  - vendor/cache/
+  - vendor/gems/
+  - vendor/ruby/
+
+# Language settings
+languages:
+  - en
+  - ru
+
+defaults:
+  - scope:
+      path: ""
+    values:
+      lang: "en"
+  - scope:
+      path: "ru"
+    values:
+      lang: "ru"
