@@ -25,24 +25,6 @@ function(set_common_properties TARGET_NAME)
     )
 endfunction()
 
-# Упрощенная функция для добавления команд анализа с плагином
-function(add_analysis_command TARGET_NAME SOURCE_FILE OUTPUT_FILE)
-    add_custom_command(TARGET ${TARGET_NAME} PRE_BUILD
-        COMMAND ${CMAKE_CXX_COMPILER} -std=c++20 -ferror-limit=500 -g -DBUILD_UNITTEST -I${CMAKE_CURRENT_SOURCE_DIR}
-                -Xclang -load -Xclang $<TARGET_FILE:trusted-cpp_clang>
-                -Xclang -add-plugin -Xclang trust
-                -Xclang -plugin-arg-trust -Xclang log
-                -Xclang -plugin-arg-trust -Xclang level=warning
-                ${ARGN}
-                -MMD -MP -MF ${OUTPUT_FILE}.d
-                -o ${OUTPUT_FILE}.o
-                -c ${SOURCE_FILE}
-        DEPENDS ${TARGET_NAME} trusted-cpp_clang
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        COMMENT "Analyzing ${SOURCE_FILE} with trust plugin"
-    )
-endfunction()
-
 # Создание библиотеки плагина clang
 add_library(trusted-cpp_clang SHARED
     plugin/trusted-cpp_clang.cpp
@@ -73,33 +55,13 @@ target_link_libraries(trusted-cpp_clang
     ${YAML_CPP_LIBRARIES}
 )
 
-# Генерация файла circleref.trust
-add_custom_command(
-    OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/test/circleref.trust
-    COMMAND ${CMAKE_CXX_COMPILER} -std=c++20 -ferror-limit=500 -I${CMAKE_CURRENT_SOURCE_DIR}/test
-            -Xclang -load -Xclang $<TARGET_FILE:trusted-cpp_clang>
-            -Xclang -add-plugin -Xclang trust
-            -Xclang -plugin-arg-trust -Xclang level=warning
-            -Xclang -plugin-arg-trust -Xclang circleref-write=${CMAKE_CURRENT_SOURCE_DIR}/test/circleref.trust
-            -fsyntax-only ${CMAKE_CURRENT_SOURCE_DIR}/test/_example.cpp
-    DEPENDS trusted-cpp_clang
-    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-    COMMENT "Generating circleref.trust"
-)
-
-add_custom_target(circleref_trust ALL
-    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/test/circleref.trust
-)
-
 # Настройка целей тестирования
 add_executable(trusted-cpp_unittest
-    test/_cycles.cpp
-    test/_example.cpp
     test/trusted-cpp_test.cpp
 )
 
 set_target_properties(trusted-cpp_unittest PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test/temp
 )
 
 set_common_properties(trusted-cpp_unittest)
@@ -124,23 +86,14 @@ target_link_libraries(trusted-cpp_unittest
 # Обеспечение зависимостей
 add_dependencies(trusted-cpp_unittest trusted-cpp_clang)
 
-# Добавление команд анализа для тестовых файлов
-add_analysis_command(trusted-cpp_unittest
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/_cycles.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/_cycles
-    -Xclang -plugin-arg-trust -Xclang circleref-read=${CMAKE_CURRENT_SOURCE_DIR}/test/circleref.trust
-)
-
-add_analysis_command(trusted-cpp_unittest
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/_example.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test/_example
-    -Xclang -plugin-arg-trust -Xclang circleref-disable
-)
-
 # Цель для запуска тестов
 add_custom_target(run_tests
-    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/trusted-cpp_unittest
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/temp/trusted-cpp_unittest
     DEPENDS trusted-cpp_unittest
+
+    COMMAND echo Run: LLVM Integrated Tester in ${CMAKE_CURRENT_SOURCE_DIR}/test
+    COMMAND ${PYTHON_EXECUTABLE} /usr/lib/llvm-21/build/utils/lit/lit.py ${CMAKE_CURRENT_SOURCE_DIR}/test -v
+
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
     COMMENT "Running trust unit tests"
 )
