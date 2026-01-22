@@ -60,82 +60,34 @@ static std::unique_ptr<TrustPlugin> plugin;
 static std::unique_ptr<TrustFile> scaner;
 static bool is_verbose = false;
 
+static std::map<SourceLocation, bool> m_attrs;
+
 void Verbose(SourceLocation loc, std::string_view msg);
 
-/**
- * @def TrustLogger
- *
- * Container for addeded attributes with a processing mark
- * (so as not to miss unprocessed attributes) and plugin analyzer log.
- */
-
-class TrustLogger {
-    const CompilerInstance &m_ci;
-    std::map<SourceLocation, bool> m_attrs;
-    std::vector<std::pair<SourceLocation, std::string>> m_logs;
-
-  public:
-    TrustLogger(const CompilerInstance &ci) : m_ci(ci) {}
-
-    // void Log(SourceLocation loc, std::string str) {
-    //     if (is_verbose) {
-    //         llvm::outs() << LocToStr(loc) << " verbose: " << str << "\n";
-    //     }
-    //     m_logs.push_back({std::move(loc), std::move(str)});
+inline void AttrAdd(SourceLocation loc) {
+    assert(loc.isValid());
+    m_attrs.emplace(loc, false);
+    // if(is_verbose){
+    //     llvm::outs() << "verbose:"
     // }
-
-    inline void AttrAdd(SourceLocation loc) {
-        assert(loc.isValid());
-        m_attrs.emplace(loc, false);
-        // if(is_verbose){
-        //     llvm::outs() << "verbose:"
-        // }
+}
+void AttrComplete(SourceLocation loc) {
+    auto found = m_attrs.find(loc);
+    if (found == m_attrs.end()) {
+        Verbose(loc, "Attribute location not found!");
+    } else {
+        found->second = true;
     }
+}
 
-    void AttrComplete(SourceLocation loc) {
-        auto found = m_attrs.find(loc);
-        if (found == m_attrs.end()) {
-            Verbose(loc, "Attribute location not found!");
-        } else {
-            found->second = true;
-        }
+static std::string LocToStr(const SourceLocation &loc, const SourceManager &sm) {
+    std::string str = loc.printToString(sm);
+    size_t pos = str.find(' ');
+    if (pos == std::string::npos) {
+        return str;
     }
-
-    static std::string LocToStr(const SourceLocation &loc, const SourceManager &sm) {
-        std::string str = loc.printToString(sm);
-        size_t pos = str.find(' ');
-        if (pos == std::string::npos) {
-            return str;
-        }
-        return str.substr(0, pos);
-    }
-
-    inline std::string LocToStr(const SourceLocation &loc) { return LocToStr(loc, m_ci.getSourceManager()); }
-
-    // void Dump(raw_ostream &out) {
-
-    //     // For simple copy-paste into unit tests
-
-    //     //            for (auto &elem : m_logs) {
-    //     //                out << "    \"" << elem.second.substr(0, elem.second.find(" ", 7)) << "\",\n";
-    //     //            }
-    //     //            out << "\n";
-
-    //     out << TRUST_KEYWORD_START_LOG;
-    //     for (auto &elem : m_logs) {
-    //         out << LocToStr(elem.first);
-    //         out << ": " << elem.second << "\n";
-    //     }
-    //     for (auto &elem : m_attrs) {
-    //         if (!elem.second) {
-    //             out << LocToStr(elem.first);
-    //             out << ": unprocessed attribute!\n";
-    //         }
-    //     }
-    // }
-};
-
-static std::unique_ptr<TrustLogger> logger;
+    return str.substr(0, pos);
+}
 
 /**
  * @def TrustAttrInfo
@@ -198,9 +150,7 @@ struct TrustAttrInfo : public ParsedAttrInfo {
         }
 
         // Add attribute location to check after plugin processing
-        if (logger) {
-            logger->AttrAdd(Attr.getLoc());
-        }
+        AttrAdd(Attr.getLoc());
 
         return AnnotateAttr::Create(S.Context, TO_STR(TRUST_KEYWORD_ATTRIBUTE), ArgsBuf.data(), ArgsBuf.size(), Attr.getRange());
     }
@@ -611,7 +561,6 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     static inline const char *REMARK = TRUST_KEYWORD_REMARK;
     static inline const char *IGNORED = TRUST_KEYWORD_IGNORED;
 
-    static inline const char *BASELINE = TRUST_KEYWORD_BASELINE;
     static inline const char *UNSAFE = TRUST_KEYWORD_UNSAFE;
     static inline const char *PRINT_AST = TRUST_KEYWORD_PRINT_AST;
     static inline const char *PRINT_DUMP = TRUST_KEYWORD_PRINT_DUMP;
@@ -621,8 +570,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     static inline const char *STATUS_PUSH = TRUST_KEYWORD_PUSH;
     static inline const char *STATUS_POP = TRUST_KEYWORD_POP;
 
-    std::set<std::string> m_listFirstArg{PROFILE,         STATUS,       LEVEL,      UNSAFE,   SHARED_TYPE, AUTO_TYPE,
-                                         INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE, BASELINE, PRINT_AST,   PRINT_DUMP};
+    std::set<std::string> m_listFirstArg{PROFILE,         STATUS,       LEVEL,      UNSAFE,    SHARED_TYPE, AUTO_TYPE,
+                                         INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE, PRINT_AST, PRINT_DUMP};
     std::set<std::string> m_listStatus{STATUS_ENABLE, STATUS_DISABLE, STATUS_PUSH, STATUS_POP};
     std::set<std::string> m_listLevel{ERROR, WARNING, NOTE, REMARK, IGNORED};
 
@@ -661,9 +610,6 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
     static const inline std::pair<std::string, std::string> pair_empty{std::make_pair<std::string, std::string>("", "")};
 
-    int64_t line_base;
-    int64_t line_number;
-
     LifeTimeScope m_scopes;
 
     trust::StringMatcher m_dump_matcher;
@@ -672,11 +618,12 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
     const CompilerInstance &m_CI;
 
-    TrustPlugin(const CompilerInstance &instance) : m_CI(instance), m_scopes(instance), line_base(0), line_number(0) {
+    TrustPlugin(const CompilerInstance &instance) : m_CI(instance), m_scopes(instance) {
         // Zero level for static variables
         m_scopes.PushScope(SourceLocation(), std::monostate(), SourceLocation());
 
         m_diagnostic_level = clang::DiagnosticsEngine::Level::Error;
+        m_level_non_const_method = clang::DiagnosticsEngine::Level::Error;
 
         m_is_cyclic_analysis = true;
     }
@@ -711,39 +658,6 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         }
         return original;
     }
-
-    std::string LogPos(const SourceLocation &loc) {
-
-        size_t line_no = 0;
-        if (loc.isMacroID()) {
-            line_no = m_CI.getSourceManager().getSpellingLineNumber(m_CI.getSourceManager().getExpansionLoc(loc));
-        } else {
-            line_no = m_CI.getSourceManager().getSpellingLineNumber(loc);
-        }
-
-        if (loc.isValid()) {
-            return std::format("{}", line_no - line_base + line_number);
-        }
-        return "0";
-    }
-
-    // void Verbose(SourceLocation loc, std::string str, SourceLocation hash = SourceLocation(), LogLevel level = LogLevel::INFO) {
-    //     if (logger) {
-    //         // const char *prefix = nullptr;
-    //         // switch (level) {
-    //         // case LogLevel::INFO:
-    //         //     prefix = "log";
-    //         //     break;
-    //         // case LogLevel::WARN:
-    //         //     prefix = "warn";
-    //         //     break;
-    //         // case LogLevel::ERR:
-    //         //     prefix = "err";
-    //         //     break;
-    //         // }
-    //         logger->Log(loc, str); // std::format("#{} #{} {}", prefix, hash.isValid() ? LogPos(hash) : LogPos(loc), str));
-    //     }
-    // }
 
     void LogWarning(SourceLocation loc, std::string str, SourceLocation hash = SourceLocation()) {
         // Verbose(loc, str);
@@ -870,7 +784,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             } else if (first.compare(WARNING_TYPE) == 0) {
                 m_warning_type.emplace(second.begin());
             } else if (first.compare(SHARED_TYPE) == 0) {
-                m_shared_type.emplace(second.begin(), TrustLogger::LocToStr(loc, m_CI.getSourceManager()));
+                m_shared_type.emplace(second.begin(), LocToStr(loc, m_CI.getSourceManager()));
             } else if (first.compare(AUTO_TYPE) == 0) {
                 m_auto_type.emplace(second.begin());
             } else if (first.compare(INVALIDATE_FUNC) == 0) {
@@ -902,7 +816,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             return std::get<std::string>(loc);
         }
         assert(std::holds_alternative<const CXXRecordDecl *>(loc));
-        return TrustLogger::LocToStr(std::get<const CXXRecordDecl *>(loc)->getLocation(), m_CI.getSourceManager());
+        return LocToStr(std::get<const CXXRecordDecl *>(loc)->getLocation(), m_CI.getSourceManager());
     }
 
     void setCyclicAnalysis(bool status) { m_is_cyclic_analysis = status; }
@@ -1303,9 +1217,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
                     if (pair.first.compare(UNSAFE) == 0) {
 
-                        if (logger) {
-                            logger->AttrComplete(elem->getLocation());
-                        }
+                        AttrComplete(elem->getLocation());
 
                         Verbose(attrStmt->getBeginLoc(), "Unsafe statement"); //, attrStmt->getBeginLoc());
 
@@ -1370,29 +1282,6 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
                 LogError(attr->getLocation(), error_str);
 
-            } else if (attr_args.first.compare(BASELINE) == 0) {
-
-                SourceLocation loc = decl->getLocation();
-                if (loc.isMacroID()) {
-                    loc = m_CI.getSourceManager().getExpansionLoc(loc);
-                }
-
-                try {
-                    int old_line_number = line_number;
-                    line_number = std::stoi(SeparatorRemove(attr_args.second));
-                    line_base = getDiag().getSourceManager().getSpellingLineNumber(loc);
-
-                    if (old_line_number >= line_number) {
-                        Verbose(loc, "Error in base sequential numbering");
-                        getDiag().Report(loc, getDiag().getCustomDiagID(DiagnosticsEngine::Error, "Error in base sequential numbering"));
-                    }
-
-                } catch (...) {
-                    Verbose(loc, "The second argument is expected to be a line number as a literal string!");
-                    getDiag().Report(
-                        loc, getDiag().getCustomDiagID(DiagnosticsEngine::Error, "The second argument is expected to be a line number as a literal string!"));
-                }
-
             } else if (attr_args.first.compare(STATUS) == 0) {
 
                 clang::DiagnosticBuilder DB =
@@ -1400,9 +1289,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                 DB.AddString(attr_args.second);
             }
 
-            if (logger) {
-                logger->AttrComplete(attr->getLocation());
-            }
+            AttrComplete(attr->getLocation());
         }
     }
 
@@ -1428,9 +1315,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                         m_dump_location = decl->getLocation();
                     }
 
-                    if (logger) {
-                        logger->AttrComplete(attr->getLocation());
-                    }
+                    AttrComplete(attr->getLocation());
 
                 } else if (attr_args.first.compare(PRINT_DUMP) == 0) {
 
@@ -1438,9 +1323,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                         return;
                     }
 
-                    if (logger) {
-                        logger->AttrComplete(attr->getLocation());
-                    }
+                    AttrComplete(attr->getLocation());
 
                     llvm::outs() << m_scopes.Dump(attr->getLocation(), attr_args.second);
                 }
@@ -2257,17 +2140,17 @@ class TrustPluginASTConsumer : public ASTConsumer {
 
                             shared.parents.clear();
                             for (auto par_elem : parents) {
-                                shared.parents[par_elem.first] = TrustLogger::LocToStr(par_elem.second.second, context.getSourceManager());
+                                shared.parents[par_elem.first] = LocToStr(par_elem.second.second, context.getSourceManager());
                             }
 
                             plugin->reduceSharedList(fields, false);
 
                             shared.fields.clear();
                             for (auto fil_elem : fields) {
-                                shared.fields[fil_elem.first] = TrustLogger::LocToStr(fil_elem.second.second, context.getSourceManager());
+                                shared.fields[fil_elem.first] = LocToStr(fil_elem.second.second, context.getSourceManager());
                             }
 
-                            shared.comment = TrustLogger::LocToStr((*cls)->getLocation(), context.getSourceManager());
+                            shared.comment = LocToStr((*cls)->getLocation(), context.getSourceManager());
                             classes[(*cls)->getQualifiedNameAsString()] = shared;
                         }
                     }
@@ -2278,7 +2161,7 @@ class TrustPluginASTConsumer : public ASTConsumer {
                 for (auto elem : plugin->m_not_shared_class) {
                     if (plugin->m_shared_type.find(elem.first) == plugin->m_shared_type.end()) {
                         shared.comment = "Not shared type at: ";
-                        shared.comment += TrustLogger::LocToStr(elem.second.second, context.getSourceManager());
+                        shared.comment += LocToStr(elem.second.second, context.getSourceManager());
                         classes[elem.first] = shared;
                     }
                 }
@@ -2288,12 +2171,11 @@ class TrustPluginASTConsumer : public ASTConsumer {
             }
         }
 
-        if (logger && is_verbose) {
+        if (is_verbose) {
 
             llvm::outs().flush();
             llvm::errs().flush();
 
-            // logger->Dump(llvm::outs());
             plugin->dump(llvm::outs());
         }
     }
@@ -2384,8 +2266,8 @@ class TrustPluginASTAction : public PluginASTAction {
             if (!message.empty()) {
                 if (first.compare("log") == 0 || first.compare("verbose") == 0) {
 
-                    logger = std::unique_ptr<TrustLogger>(new TrustLogger(CI));
-                    PrintColor(llvm::outs(), "Enable dump and process logger");
+                    // logger = std::unique_ptr<TrustLogger>(new TrustLogger(CI));
+                    // PrintColor(llvm::outs(), "Enable dump and process logger");
 
                     is_verbose = true;
                     PrintColor(llvm::outs(), "Verbose mode enabled");
@@ -2436,14 +2318,7 @@ class TrustPluginASTAction : public PluginASTAction {
 
 void Verbose(SourceLocation loc, std::string_view msg) {
     if (is_verbose && plugin) {
-        std::string str = loc.printToString(plugin->m_CI.getSourceManager());
-        size_t pos = str.find(' ');
-        if (pos == std::string::npos) {
-            llvm::outs() << str;
-        } else {
-            llvm::outs() << str.substr(0, pos);
-        }
-        llvm::outs() << ": verbose: " << msg.begin() << "\n";
+        llvm::outs() << LocToStr(loc, plugin->m_CI.getSourceManager()) << ": verbose: " << msg.begin() << "\n";
     }
 }
 

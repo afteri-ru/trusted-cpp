@@ -39,9 +39,7 @@
 #define TRUST_KEYWORD_UNSAFE "unsafe"
 #define TRUST_KEYWORD_PRINT_AST "print-ast"
 #define TRUST_KEYWORD_PRINT_DUMP "print-dump"
-#define TRUST_KEYWORD_BASELINE "baseline"
 
-#define TRUST_KEYWORD_START_LOG "#trust-log\n"
 #define TRUST_KEYWORD_START_DUMP "#trust-dump\n"
 
 #define TRUST_KEYWORD_ENABLE "enable"
@@ -103,19 +101,6 @@
  * if they are supported by the compiler 
  * and the library semantic analysis plugin is connected
  * 
- */
-
-/**
- * @def TRUSTED_BASELINE(number)
- * 
- * Set the current base line number of [[trust( "baseline", "num" )]] 
- * markers used when debugging the plugin.
- * 
- * If you don't use this macro, the line numbers at the debug marker positions 
- * will match the line numbers in the source file.
- * 
- * Set base line number  is implemented as a set of custom attributes in the 
- * stub function `void trust_stub()` forward declaration, as this can be done anywhere in C++ code.
  */
 
 /**

@@ -79,10 +79,10 @@ void *invalidate_test(int arg) {
             std::sort(beg, vect.end()); // Error
             // CHECK: error: Using the dependent variable 'beg' after changing the main variable 'vect'!
             // CHECK-NEXT:           std::sort(beg, vect.end()); // Error
-            // CHECK-NEXT:                    ^
+            // CHECK-NEXT:                     ^
+            // CHECK-NEXT: verbose: Both methods 'end' for constant and non-constant objects tracking enabled!
 
             const std::vector<int> vect_const;
-            // CHECK: verbose: Both methods 'end' for constant and non-constant objects tracking enabled!
         }
     }
 

@@ -57,7 +57,7 @@ target_link_libraries(trusted-cpp_clang
 
 # Настройка целей тестирования
 add_executable(trusted-cpp_unittest
-    test/trusted-cpp_test.cpp
+    test/trusted-cpp_unittest.cpp
 )
 
 set_target_properties(trusted-cpp_unittest PROPERTIES
