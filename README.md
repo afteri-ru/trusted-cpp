@@ -1,352 +1,186 @@
-# New **trusted-cpp** branch 
+# Trusted-cpp (Доверенный C++)
 
-- Реализация концепции безопасной разработки на основе гарантий языка для С++ https://habr.com/ru/articles/964816/    
-- Implementing the concept of safe software development based on language guarantees for C++  https://www.reddit.com/r/trust_lang/comments/1otk09j/programming_language_guarantees_as_a_base_for/ 
+Данный проект демонстрирует концепцию гарантий безопасной разработки программного обеспечения на C++ на уровне синтаксиса языка. Другими словами, если код на C++ скомпилировался корректно, значит, в нем отсутствуют следующие ошибки, а следовательно и связанные с ними уязвимости:
 
+- переполнение буфера
+- разыменование неинициализированной ссылки или нулевого указателя
+- обращение по некорректному адресу памяти из-за инвалидации ссылки или итератора
+- утечки памяти, в том числе из-за циклических или перекрестных ссылок
+- «состояние гонки» при обращении к разделяемым ресурсам из разных потоков
 
--------
+Кроме того, для C++ реализуются дополнительные возможности:
 
+- использование именной, а не структурной идентификации типов данных
+- закрытые области видимости для ограничения доступа к внешним переменным
+- создание чистых функций (без побочных эффектов)
+- возможность ограничения (запрета) на создание копий ссылок (restrict/noalias)
+- ограничения на использование макросов препроцессора в экспортируемом интерфейсе C++ модулей
+- ручной и автоматический контроль стека от переполнения (при использовании проекта [stack-check](https://github.com/afteri-ru/stack-check))
+- формальный анализ доказательства корректности программы **\***
 
-## Memory Safety for C++
+Проект Trusted-cpp позволяет изменить подход к безопасности программного обеспечения с точечного поиска и исправления отдельных ошибок и уязвимостей на гарантию их отсутствия в исходном коде программы. Анализ уязвимостей C++ во время компиляции (с помощью плагина для компилятора) обеспечивает ряд стратегических преимуществ:
 
-There are many projects that want to make C++ a "safer" programming language.
-But making changes to the language syntax usually breaks backward compatibility with older code written earlier.
+- Вместо поиска отдельных ошибок в конечном программном продукте автоматически устраняются целые классы уязвимостей.
+- Можно сосредоточиться на логике задачи, полностью доверяя компилятору и системе типов в вопросах базовой безопасности.
+- Предотвращение уязвимостей на этапе написания кода на порядки дешевле, чем их обнаружение и исправление в конечном продукте или полное переписывание программы на другом языке программирования.
 
-This project contains code for a library header file and compiler plugin for *safe C++*, 
-which fixes C++'s core problems with memory and reference data types without breaking backwards compatibility with old legacy code.
+<a id="concept"></a>
+## Реализация Trusted-CPP
 
-### Motivation
+В основе проекта лежит концепция безопасной работы с памятью из языка NewLang (trust-lang), которая была портирована на C++ в виде отдельной библиотеки memsafe и впоследствии расширена, в том числе за счет реализации части требований [STEELMAN](https://dwheeler.com/steelman/) адаптированных для C++.
 
-> The global problem of the C and C++ languages ​​is that the pointer to the allocated memory block in the heap is an ordinary address
-> in RAM and has no connection with variables - pointers that are in local variables on the stack,
-> and whose lifetime is controlled by the compiler.
->
-> The second, no less serious problem, which often leads to undefined behavior (Undefined Behavior)
-> or data races (Data Races) is access to the same memory area from different threads at the same time.
+Гарантии безопасной разработки программного обеспечения на уровне синтаксиса языка реализуются компилятором C++ за счет автоматической проверки исходного текста программы и наложения ограничений на использование отдельных фрагментов кода, которые могут привести к ошибкам или уязвимостям.
 
-There are many projects that want to make C++ a "safer" programming language.
-But making changes to the language's syntax usually breaks backward compatibility with older code written earlier.
+Непосредственный анализ исходного кода Trusted-CPP выполняется плагином компилятора, но сам исходный код остается обычной программой на C++, и его можно компилировать любым компилятором без использования плагина, а также применять линтеры и дополнительные статические анализаторы.
 
-This project contains a header only library and a compiler plugin for *safe C++*,
-which fixes the main problems of C++ when working with memory and reference data types
-without breaking backward compatibility with old legacy code (it uses C++20, but can be downgraded to C++17 or C++11).
+Анализ исходного кода Trusted-CPP основан на маркировке элементов с помощью пользовательских C++ атрибутов, что очень похоже на предложения в профилях безопасности [p3038](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p3038r0.pdf) от Bjarne Stroustrup и [P3081](https://isocpp.org/files/papers/P3081R0.pdf) от Herb Sutter, но не требует разработки нового стандарта C++ (достаточно использовать уже существующий C++20).
 
-The method of marking objects in the source code and configuring the plugin's operation parameters
-is performed using C++ attributes, which is very similar to the security profiles
-[p3038](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p3038r0.pdf) by Bjarne Stroustrup
-and [P3081](https://isocpp.org/files/papers/P3081R0.pdf) by Herb Sutter,
-but does not require the creation of a new standard (it is enough to use the existing C++20).
+Проверка синтаксических правил активируется автоматически во время компиляции при подключении плагина за счет использования встроенной функции `__has_attribute (trust)`. Если плагин во время компиляции отсутствует, то использование пользовательских атрибутов отключается с помощью макросов препроцессора, чтобы подавить предупреждения вида `warning: unknown attribute 'trust' ignored [-Wunknown-attributes]`.
 
+Важной особенностью Trusted-CPP является возможность маркировки различных элементов с помощью пользовательских C++ атрибутов не только во время определения класса или функции, но и в произвольном месте исходного текста программы (или даже во внешнем конфигурационном файле), что позволяет маркировать важные классы, функции или их аргументы уже после их определения и без необходимости изменять ранее написанный код.
 
-### Concept
+Детали реализации Trusted-CPP:
 
-The concept of safe memory management consists of implementing the following principles:
-- If the program is guaranteed to have no strong cyclic references
-(references of an object to itself or cross-references between several objects),
-then when implementing the [RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization) principle
-*automatic memory release will be performed **always***.
-- The absence of cyclic references in the program code can only be guaranteed by prohibiting them at the level of *types* (class definitions).
-- The problem of data races when accessing memory from different threads is solved by using inter-thread synchronization objects,
-and to prevent errors in logic, only one operator (function call) should be used to capture
-the synchronization object and dereference the reference at the same time in one place.
+- [Открытые и закрытые области видимости переменных](#scopes)
+- [Расширенные возможности типов данных C++](#features)
+- [Безопасная работа с памятью](#memsafe)
+- [Контроль многопоточного доступа к данным](#threadsafe)
+- [Ограничения макросов в экспортируемом интерфейсе C++ модулей](#macromodule)
+- [*Ручной и автоматический контроль стека от переполнения*](#stack-check)
+- [*Формальный анализ доказательства корректности программы* **\***](#trust-assert)
 
-The concept of safe memory management is ported to C++ from the [NewLang](https://newlang.net/) language,
-but is implemented using the standard C++ template classes *shared_ptr* and *weak_ptr*.
+### Примеры использования Trusted-CPP
 
-The main difference when working with reference variables, compared to shared_ptr and weak_ptr, 
-is the method of dereferencing references (getting the address of an object), 
-and the method of accessing the object, which can be done not only by dereferencing the reference "*", 
-but also by capturing (locking) the reference and storing it in a temporary variable, 
-the lifetime of which is limited and automatically controlled by the compiler, 
-and through it direct access to the data itself (the object) is carried out.
+`clang++ -std=c++20 -Xclang -load -Xclang trust_clang.so -Xclang -add-plugin -Xclang trust _example.cpp`
 
-Such an automatic variable is a *temporary* strong reference holder and is similar to
-[std::lock_guard](https://en.cppreference.com/w/cpp/thread/lock_guard) - a synchronization object holder 
-until the end of the current scope (lifetime), after which it is automatically deleted by the compiler.
+<a id="scopes"></a>
+## Открытые и закрытые области видимости переменных
 
-### Implementation
+Концепция открытых и закрытых областей видимости для внешних переменных - это реализация пункта [5G из требований STEELMAN](https://dwheeler.com/steelman/steelman.htm#5G), только доработанного под C++ и ООП.
 
-The implementation of the concept of safe work with memory for C++ consists of two parts: a plugin for Clang and a header file of the library.
+В открытых областях нет ограничений на использование внешних переменных, тогда как в закрытых областях видимости нелокальные переменные должны быть явно импортированы (перечислены). Область видимости и список импортированных внешних переменных для вложенных областей наследуются от областей верхнего уровня до явного переопределения.
 
-Clang plugin performs static analysis of C++ code during its compilation. 
-It checks for invalidation of reference types (iterators, std::span, std::string_view, etc.) 
-when data in the original variable is changed and controls strong **cyclic** references 
-at the type level (class definitions) of any nesting **\***).
+Создание закрытой области видимости или её переопределение происходит с помощью макроса TRUST_USING_EXTERNAL(""), который применяется к определению функции, класса, метода класса или отдельного выражения. Пример использования закрытых областей видимости можно посмотреть в файле using_external.cpp
 
-The library file contains template classes that extend the standard *std::shared_ptr* and *std::weak_ptr* 
-and add automatic data race protection to them when accessing shared variables from different threads 
-(the access control method must be specified when defining the variable, after which the acquisition 
-and release of the synchronization object will occur automatically when the reference is renamed).
-*By default, shared variables are created without multi-thread access control 
-and have no additional overhead compared to the standard template classes `std::shared_ptr` and `std::weak_ptr`*.
+<a id="features"></a>
+### Усиление контроля над типами данных
 
-The library header file also contains options for controlling the analyzer plugin 
-(a list of classes that need to be monitored for invalid reference data types is defined).
+<a id="nominal"></a>
+#### Номинальная (именная) типизация
 
----
-
-**\***) - since C++ compiles files separately, and the class (data structure) 
-definition may be in a different translation unit due to forward declaration,
-two passes may be required for the circular reference analyzer to work correctly.
-*First run the plugin with the '--circleref-write -fsyntax-only' option to generate a list of classes with strong references, 
-then a second time with the '--circleref-read' option to perform the analysis. 
-Or disable the circular reference analyzer completely with the '--circleref-disable' option.*
-
-
-## Examples
-
-Command line for compiling a file with clang and using a plugin
-
-```bash
-clang++ -std=c++20 -Xclang -load -Xclang ./trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust -Xclang -plugin-arg-trust -Xclang circleref-disable _example.cpp
-```
-
-### Output of the plugin with  pointer invalidation control:
+Возможность использования именной типизации позволяет предотвратить случайную эквивалентность типов, что обеспечивает лучшую безопасность на уровне типов данных по сравнению со структурной типизацией, которая применяется в C и C++. Создание типа данных с номинальной типизацией выполняется с помощью атрибута, который раскрывается при использовании макроса TRUST_NOMINAL или перечисляется в макросе TRUST_NOMINAL_TYPES(...).
 
 ```cpp
-    std::vector<int> vec(100000, 0);
-    auto x = vec.begin();
-    vec = {};
-    vec.shrink_to_fit(); 
-    std::sort(x, vec.end()); // malloc(): unaligned tcache chunk detected or Segmentation fault
+typedef int IntType;
+static_assert(std::is_same<decltype(IntType), int>::value); // OK
+static_assert(std::is_same<decltype(IntType), IntType>::value); // OK
+
+TRUST_NOMINAL int IntSubType; // Номинальная типизация во время определения типа
+static_assert(std::is_same<decltype(IntSubType), int>::value); // FALSE
+static_assert(std::is_same<decltype(IntSubType), IntType>::value); // FALSE
+static_assert(std::is_same<decltype(IntSubType), IntSubType>::value); // OK
+
+TRUST_NOMINAL_TYPES("IntType"); // Номинальная типизация для существующего типа
+static_assert(std::is_same<decltype(IntType), int>::value); // FALSE
+static_assert(std::is_same<decltype(IntType), IntType>::value); // OK
 ```
 
-**A fragment of the compiler plugin output with error messages related 
-to invalidation of reference variables after changing data in the main variable:**
+<a id="pure-function"></a>
+#### Чистые C++ функции без побочных эффектов
 
-```bash
-_example.cpp:29:17: warning: using main variable 'vect'
-   29 |                 vect = {};
-      |                 ^
-_example.cpp:30:17: warning: using main variable 'vect'
-   30 |                 vect.shrink_to_fit();
-      |                 ^
-_example.cpp:31:27: error: Using the dependent variable 'x' after changing the main variable 'vect'!
-   31 |                 std::sort(x, vect.end()); // malloc(): unaligned tcache chunk detected or Segmentation fault 
-      |                           ^
-```
+Возможность создания чистых функций реализуется за счет добавления атрибута TRUST_PURE_FUNCTION при определении функции, который устанавливает для такой функции [закрытую область видимости для любых внешних переменных](#scopes) без возможности её переопределения внутри тела функции.
 
+#### Запрет на создание копий ссылок
 
-### Example of analyzing classes with recursive references:
+https://habr.com/ru/articles/114117/
+
+Указывает, что объявляемый указатель адресует область памяти, на которую не ссылается никакой другой указатель.
+
+Для запрета на создание копий ссылок используется макрос TRUST_RESTRICT, который на уровне исходного кода запрещает создавать копии ссылок для определенной переменной, а впоследствии может быть проброшен в компилятор при генерации кода.
+
+<a id="memsafe"></a>
+## Безопасная работа с памятью
+
+Trusted-CPP оперирует следующими видами переменных:
+
+- Обычная переменная по значению (variable by value) - данные хранятся непосредственно в самой переменной. Это переменные в их классическом понимании, когда копия переменной создает дубликат исходного значения, а изменение копии никак не влияет на исходный оригинал. Создать ссылку на переменную по значению нельзя, и для этих целей нужно использовать ссылочную переменную.
+- Сильная ссылка (shared variable) - в переменной находится только сильный (владеющий) указатель на данные. Копия сильной ссылки создает копию указателя и увеличивает счетчик владений. Такая переменная маркируется атрибутом TRUSTED_SHARED ???????????
+- Слабая ссылка (weak variable) - в переменной находится только слабый (не владеющий) указатель на данные, и создание копии слабой ссылки не увеличивает счетчик владений.
+- Locker - автоматический объект для доступа к данным у обоих видов ссылок, который реализует механизм в стиле RAII для владения захваченным значением в текущей области видимости.
+- Сырой (Raw) адрес, который в явном виде использовать нельзя, как и адресную арифметику. Но так как прямая адресация необходима для функционирования итераторов, то для всех сырых адресов работает режим автоматической инвалидации, который предупреждает об инвалидации сырого адреса в случае изменения состояния объекта, из которого он был получен.
+
+Безопасная работа с памятью в Trusted-CPP реализуется за счет реализации следующих принципов:
+
+- При отсутствии сильных циклических или перекрестных ссылок принцип [RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization) всегда гарантирует автоматическое освобождение памяти.
+- Контроль циклических/перекрестных ссылок реализуется на уровне типов данных (определений классов) во время компиляции.
+- Получение указателя на данные (разыменование ссылки) происходит с помощью создания временной/автоматической переменной.
+- Проблема гонок данных при обращении к одному участку памяти из разных потоков решается за счет их маркировки для [контроля многопоточного доступа к данным](#threadsafe).
+- Чтобы исключить логические ошибки при захвате объекта синхронизации (если это требуется у переменных с контролем многопоточного доступа), попытка захвата доступа и разыменования ссылки выполняются как одна операция.
+- Сильные и слабые ссылки являются производными от стандартных шаблонных классов C++ shared_ptr и weak_ptr, и основное отличие новых шаблонов заключается в способе обращения к объекту, который может выполняться не только с помощью разыменования "*", но и через захват (блокировку) ссылки с сохранением её во временную переменную, и уже через неё получается непосредственный доступ к самим данным (объекту).
+
+Такая автоматическая переменная является временным владельцем сильной ссылки и выполняет функции удержания объекта межпотоковой синхронизации в стиле [std::lock_guard](https://en.cppreference.com/w/cpp/thread/lock_guard), время жизни которого ограничено текущей областью видимости и управляется компилятором автоматически.
+
+<a id="threadsafe"></a>
+## Контроль многопоточного доступа к данным
+
+Методика безопасного доступа к данным из разных потоков строится на использовании двух атрибутов:
+
+Атрибут TRUST_THREADSAFE применяется к типам (классам), функциям и аргументам функций, для которых реализована (должна быть реализована) синхронизация доступа при обращении к данным из разных потоков.
+
+Вторым атрибутом TRUST_THREAD маркируется непосредственно исполняемый код потока, для которого, по аналогии с [чистыми функциями](#pure-function), ограничивается доступ к любым внешним переменным, не имеющим атрибута TRUST_THREADSAFE, т.е. их область видимости становится закрытой, а любые внешние переменные, которые импортируются с помощью макроса TRUST_USING_EXTERNAL, должны обязательно иметь атрибут TRUST_THREADSAFE.
+
+Данные атрибуты могут быть использованы как во время определения функций или классов, так и после их непосредственного определения.
+
+Для этого используются вспомогательные макросы:
+- TRUST_SET_ATTR - установить указанный атрибут для перечисленных имен функций или классов.
+- TRUST_SET_ATTR_ARGS - установить указанный атрибут для порядковых номеров аргументов у указанной функции.
 
 ```cpp
+// Установить атрибут 'thread' для классов std::thread и std::jthread
+// изнутри методов класса можно обращаться только к локальным данным объекта
+// или к внешним данным (методам/функциям), имеющим атрибут threadsafe
+TRUST_SET_ATTR(thread, std::thread);
+TRUST_SET_ATTR(thread, std::jthread);
 
-    class SharedCross2;
+// Установить атрибут 'threadsafe' для класса trust::SyncTimedShared
+TRUST_SET_ATTR(threadsafe, trust::SyncTimedShared);
 
-    class SharedCross {
-        SharedCross2 *cross2;
-    };
+// Установить атрибут 'threadsafe' для всех аргументов конструкторов классов std::thread и std::jthread
+TRUST_SET_ATTR_ARGS(threadsafe, std::thread::thread, 0);
+TRUST_SET_ATTR_ARGS(threadsafe, std::jthread::jthread, 0);
 
-    class SharedCross2 {
-        SharedCross *cross;
-    };
+// Отметить у функции pthread_create атрибутами
+// 'thread' третий аргумент и 'threadsafe' четвертый
+TRUST_SET_ATTR_ARGS(thread, pthread_create, 3);
+TRUST_SET_ATTR_ARGS(threadsafe, pthread_create, 4);
 ```
 
-A fragment of the compiler plugin output with error messages when analyzing a class:
+<a id="macromodule"></a>
+## Ограничения макросов в экспортируемом интерфейсе C++ модуля
 
-```bash
-_cycles.cpp:53:23: error: The class 'cycles::SharedCross' has a circular reference through class 'cycles::SharedCross2'
-   53 |         SharedCross2 *cross2;
-      |                       ^
-_cycles.cpp:57:22: error: The class 'cycles::SharedCross2' has a circular reference through class 'cycles::SharedCross'
-   57 |         SharedCross *cross;
-      |                      ^
-_cycles.cpp:53:23: error: Field type raw pointer
-   53 |         SharedCross2 *cross2;
-      |                       ^
-_cycles.cpp:53:23: error: The class 'cycles::SharedCross' has a circular reference through class 'cycles::SharedCross2'
-_cycles.cpp:57:22: error: Field type raw pointer
-   57 |         SharedCross *cross;
-      |                      ^
-```
+1. Вводится два режима обработки макросов компилятором:
+- Легаси режим - для всех файлов, кроме файлов модулей.
+- Новый режим - только для файлов модулей.
+2. В новом режиме добавляются области видимости (время жизни) макросов
+3. В файле C++ модуля вводятся ограничения на применение макросов в экспортируемых именах переменных, функций и классов
 
+Различия между двумя режимами заключаются в следующем. Легаси режим обработки макросов применяется для всех файлов, кроме файлов C++ модулей (т.е. обработка макросов происходит как и раньше - только на уровне препроцессора), тогда как новый режим обработки макросов предназначен исключительно для C++ модулей, а сама обработка макросов ведется с учетом AST.
 
-The plugin's message level can be limited using a macro or command line argument,
-or after checking the source code, the plugin can be omitted altogether,
-since it only parses the AST, but does not make any corrections to it.
+<a id="stack-check"></a>
+## Ручной и автоматический контроль стека от переполнения
 
+Ручной и автоматический контроль стека от переполнения - это единственная функциональность, которая вносит изменения в генерируемый код при компиляции программы, поэтому данная часть была выделена в отдельный проект [stack-check](https://github.com/afteri-ru/stack-check), который можно использовать как совместно с Trusted-CPP, так и без него.
 
-### Full output of plugin messages when compiling the test file `_example.cpp`: 
+<a id="trust-assert"></a>
+## Формальный анализ доказательства корректности программы **\***
 
-<details>
-<summary> Show output: </summary>
+Фактически, это реализация статической проверки динамических выражений AoRTE ("Absence of Run-Time Errors"), которая не дает ложных срабатываний, хотя возможны ложные отрицательные результаты. То есть, если ошибки при компиляции отсутствуют, то можно быть уверенными, что проблем в коде нет, тогда как указание на возможную ошибку не всегда соответствует действительности и инструмент может ошибаться.
 
-```bash
-clang++-20 -std=c++26 -ferror-limit=500 -Xclang -load -Xclang ./trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust -Xclang -plugin-arg-trust -Xclang circleref-disable _example.cpp
+Формальный анализ не пытается доказать правильность программы в целом. Он используется только для доказательства определяемых пользователем утверждений в разных частях программы и вызовах функций. Причем доказательство правильности выполняется только в той мере, в какой это определено пользователем, а сами утверждения корректно и в полной мере описывают и ограничивают реализацию программы.
 
-...
+Формальный анализ доказательства корректности программы реализуется по принципу gnatprove для языка Ada и использует три макроса для определения предусловий, постусловий и утверждений: TRUST_ASSERT_PRED(), TRUST_ASSERT_POST() и TRUST_ASSERT() соответственно. Это среднее между assert и static_assert, которое выполняется во время компиляции программы, но в выражении могут быть использования неконстантные значения (неконстантные выражения должны быть вычислимы на уровне типов данных или описаны в пред- и постусловиях).
 
-```
-</details>
+-----
 
-
-## Feedback
-If you have any suggestions for the development and improvement of the project, join or [write](https://github.com/rsashka/trust/discussions).
-
-
----
-
-
-## Безопасная работа с памятью для С++
-
-### Мотивация
-
-> Глобальная проблема языка C++ в том, что указатель на выделенный блок памяти в куче является обычным адресом 
-> оперативной памяти и у него отсутствует связь с локальными переменными - указателями, которые находятся на стеке,
-> и временем жизни которых управляет компилятор. 
-> 
-> Вторая, не менее серьезная проблема, которая часто приводить к неопределенному поведению (Undefined Behaviour) 
-> или гонке данных (Data Races) - это доступ к одной и той же области памяти из разных потоков одновременно.
-
-Есть много проектов, целью которых является превратить С++ более "безопасный" язык программирования.
-Но внесение изменений в синтаксис языка обычно нарушает обратную совместимость со старым кодом, который был написан до этого.
-
-Данный проект содержит заголовочный файл библиотеки и плагин компилятора для *безопасного С++*, 
-который устраняет основные проблемы С++ при работе с памятью и ссылочными типами данных 
-без нарушения обратной совместимости со старым легаси кодом (используется С++20, но можно понизить до С++17 или С++11).
-
-Способ маркировки объектов в исходноом коде и настройка параметров работы плагина
-выполняется с помощью  C++ атрибутов, что очень похоже на профили безопасности 
-[p3038](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p3038r0.pdf) от Bjarne Stroustrup 
-и [P3081](https://isocpp.org/files/papers/P3081R0.pdf) от Herb Sutter, 
-но не требует принятия нового стандарта С++.
-
-### Концепция
-
-Концепция безопасной работы с памятью заключается в реализации следующих принципов:   
-- Если в программе гарантированно отсутствуют сильные циклические ссылки 
-(ссылка объекта на самого себя или перекрестные ссылки между несколькими объектами), 
-тогда при реализации принципа [RAII](https://en.wikipedia.org/wiki/Resource_acquisition_is_initialization), 
-*автоматическое освобождение памяти будет выполнятся **всегда***.
-- Гарантировать отсутствие циклических ссылок можно только путем их запрета на уровне *типов* (определений классов).
-- Проблема гонок данных при обращении к памяти из разных потоков решается за счет использования объектов межпотоковой синхронизации.
-Чтобы исключить ошибки в логике для захвата объекта синхронизации и разименования ссылки используются единый оператор (вызов функции).
-
-Изначальная идея безопасной работы с памятью  была взята из языка [NewLang](https://newlang.net/), 
-но реализована на базе стандартных шаблонных классов С++ *shared_ptr* и *weak_ptr*.
-
-Основное отличие новых шаблонов заключается в способе обращения к объекту, 
-который может выполняться не только с помощью разименования "**\***", 
-но и через захват (блокировку) ссылки с сохранением её во *временную переменную*
-и уже через неё получается доступ непосредственный к самим данным (объекту). 
-
-Такая автоматическая переменная является *временным* владельцем сильной ссылки и выполняет функции удержания
-объекта межпотоковой синхронизации в стиле [std::lock_guard](https://en.cppreference.com/w/cpp/thread/lock_guard),
-время жизни которого ограничено текущей областью видимости и управляется компилятором автоматически.
-
-### Реализация
-
-Реализация концепции безопасной работы с памятью для С++ состоит из двух частей: плагина для Clang и заголовочного файла библиотеки.
-
-С помощью плагина для Clang выполняется статический анализ С++ кода во время его компиляции.
-В плагине реализованы проверка инвалидации ссылочных типов (итераторов, std::span, std::string_view и т.д.) при изменении данных в исходной переменной
-и контроль сильных **циклических** ссылок на уровне типов (определений классов) любой вложенности **\***).
-
-В файле библиотеки находятся шаблонные классы, расширяющие стандартные *std::shared_ptr* и *std::weak_ptr* 
-с автоматической защитой от гонок данных при доступе к общим переменным из разных потоков
-(способ контроля доступа требуется указать при определении переменной, 
-после чего захват и освобождение объекта синхронизации будут происходить автоматически при разименовании ссылки).
-*По умолчанию общие переменные создаются без контроля многопоточного доступа 
-и не имеют дополнительных накладных расходов по стравнению с стандартными шаблонными классами `std::shared_ptr` и `std::weak_ptr`*.
-
-Так же в заголовочным файле библиотеки находятся опции для управления плагином анализатора 
-(опредляется список классов, которые необходимо отслеживать для инвалидации ссылочных типов данных).
-
----
-
-**\***) - *поскольку C++ компилирует файлы по отдельности, а определение класса (структуры данных)
-может находиться в другой единице трансляции из-за предварительного объявления,
-для корректной работы анализатора циклических ссылок может потребоваться два прохода.* 
-*Сначала запустить плагин с ключом '--circleref-write -fsyntax-only', чтобы сгенерировать список классов
-с сильными ссылками, затем второй раз с ключом '--circleref-read', чтобы выполнить анализ.
-Или полностью отключить анализатор циклических ссылок с помощью опции '--circleref-disable'.*
-
-## Примеры
-
-Командная строка компиляции файла с помощью clang с загрузкой плагина
-
-```bash
-clang++ -std=c++20 -Xclang -load -Xclang ./trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust -Xclang -plugin-arg-trust -Xclang circleref-disable _example.cpp
-```
-
-### Вывод плагина с контролем инвалидации ссылок:
-
-```cpp
-    std::vector<int> vec(100000, 0);
-    auto x = vec.begin();
-    vec = {};
-    vec.shrink_to_fit(); 
-    std::sort(x, vec.end()); // malloc(): unaligned tcache chunk detected or Segmentation fault
-```
-
-Фрагмент вывода плагина компилятора с сообщениями об ошибках, 
-связанных с недействительностью ссылочных переменных после изменения данных в основной переменной:
-
-```bash
-_example.cpp:29:17: warning: using main variable 'vect'
-   29 |                 vect = {};
-      |                 ^
-_example.cpp:30:17: warning: using main variable 'vect'
-   30 |                 vect.shrink_to_fit();
-      |                 ^
-_example.cpp:31:27: error: Using the dependent variable 'x' after changing the main variable 'vect'!
-   31 |                 std::sort(x, vect.end()); // malloc(): unaligned tcache chunk detected or Segmentation fault 
-      |                           ^
-```
-
-### Пример анализа классов с рекурсивными ссылками:
-
-```cpp
-
-    class SharedCross2;
-
-    class SharedCross {
-        SharedCross2 *cross2;
-    };
-
-    class SharedCross2 {
-        SharedCross *cross;
-    };
-```
-
-Фрагмент вывода плагина компилятора с сообщениями об ошибках при анализе класса:
-```bash
-_cycles.cpp:53:23: error: The class 'cycles::SharedCross' has a circular reference through class 'cycles::SharedCross2'
-   53 |         SharedCross2 *cross2;
-      |                       ^
-_cycles.cpp:57:22: error: The class 'cycles::SharedCross2' has a circular reference through class 'cycles::SharedCross'
-   57 |         SharedCross *cross;
-      |                      ^
-_cycles.cpp:53:23: error: Field type raw pointer
-   53 |         SharedCross2 *cross2;
-      |                       ^
-_cycles.cpp:53:23: error: The class 'cycles::SharedCross' has a circular reference through class 'cycles::SharedCross2'
-_cycles.cpp:57:22: error: Field type raw pointer
-   57 |         SharedCross *cross;
-      |                      ^
-```
-
-
-Уровень сообщений плагина можно ограничить с помощью макроса или аргумента командной строки, 
-либо после проверки исходного кода плагин можно вообще не использовать,  
-поскольку он только анализирует AST, но не вносит в него никаких исправлений.
-
-
-### Полный вывод сообщений плагина при компиляции тестового файла `_example.cpp`:
-<details>
-<summary>Показать вывод</summary>
-
-```bash
-clang++-20 -std=c++20 -ferror-limit=500 -Xclang -load -Xclang ./trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust -Xclang -plugin-arg-trust -Xclang circleref-disable _example.cpp
-
-
-...
-
-
-```
-</details>
-
-
-## Обратная связь
-Если у вас есть предложения по развитию и улучшению проекта, присоединяйтесь или [пишите](https://github.com/rsashka/trust/discussions)
+**\*)** - Данная функциональность запланирована для реализации, но пока находится на паузе до завершения основной части проекта
 
