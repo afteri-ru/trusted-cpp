@@ -10,9 +10,9 @@ Welcome to the English documentation for Trusted-CPP, a project that guarantees 
 
 ## Table of Contents
 
-- [Concept](/concept/)
-- [Installation](/installation/)
-- [Examples](/examples/)
+- [Concept](concept)
+- [Installation](installation)
+- [Examples](examples)
 
 ## About the Project
 

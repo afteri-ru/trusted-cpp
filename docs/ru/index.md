@@ -10,9 +10,9 @@ lang: ru
 
 ## Содержание
 
-- [Концепция](/ru/concept/)
-- [Установка](/ru/installation/)
-- [Примеры](/ru/examples/)
+- [Концепция](concept)
+- [Установка](installation)
+- [Примеры](examples)
 
 ## О проекте
 
