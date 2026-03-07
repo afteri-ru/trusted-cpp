@@ -60,9 +60,11 @@ static std::unique_ptr<TrustPlugin> plugin;
 static std::unique_ptr<TrustFile> scaner;
 static bool is_verbose = false;
 
+StringMatcher VerboseMatcher;
+
 static std::map<SourceLocation, bool> m_attrs;
 
-void Verbose(SourceLocation loc, std::string_view msg);
+void Verbose(SourceLocation loc, std::string_view msg, const std::string &tag = "");
 
 inline void AttrAdd(SourceLocation loc) {
     assert(loc.isValid());
@@ -81,7 +83,10 @@ void AttrComplete(SourceLocation loc) {
 }
 
 static std::string LocToStr(const SourceLocation &loc, const SourceManager &sm) {
-    std::string str = loc.printToString(sm);
+    std::string str;
+    if (loc.isValid()) {
+        str = loc.printToString(sm);
+    }
     size_t pos = str.find(' ');
     if (pos == std::string::npos) {
         return str;
@@ -190,6 +195,7 @@ struct LifeTime {
      * The scope and lifetime of variables (code block, function definition, function or method call, etc.)
      */
     const ScopeType scope;
+    // const CXXRecordDecl *member;
 
     /**
      * Map of iterators and reference variables (iter => value)
@@ -214,18 +220,29 @@ struct LifeTime {
     std::set<std::string> other;
 
     // Start location for FunctionDecl or other ...Calls, or End locattion for Stmt
-    SourceLocation location;
+    SourceLocation startLoc;
+    SourceLocation endLoc;
 
     // Locattion for UNSAFE block or Invalid
     SourceLocation unsafeLoc;
 
-    LifeTime(SourceLocation loc = SourceLocation(), const ScopeType c = std::monostate(), SourceLocation unsafe = SourceLocation())
-        : location(loc), scope(c), unsafeLoc(unsafe) {}
+    // Pure function or class
+    SourceLocation pureLoc;
+
+    bool top_level;
+
+    // A patterns of global variable names for the current scope
+    // std::string USING_EXTERNAL;
+    StringMatcher globalsMatcher;
+
+    LifeTime(SourceLocation start = SourceLocation(), SourceLocation stop = SourceLocation(), const ScopeType c = std::monostate(), bool top = true)
+        : startLoc(start), endLoc(stop), scope(c), unsafeLoc(SourceLocation()), pureLoc(SourceLocation()), top_level(top), globalsMatcher() {}
 };
 
-class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque instead of vector as it preserves iterators when resizing
+class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of vector as it preserves iterators when resizing
 
   public:
+    static constexpr std::string TAG_liftime = "lifetime";
     enum ModifyMode : uint8_t {
         UNKNOWN = 0,
         BOTH_MODE = 1,
@@ -247,6 +264,21 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
         }
         return SourceLocation();
     }
+
+    const CXXRecordDecl *getParent() {
+        auto iter = rbegin();
+        while (iter != rend()) {
+            if (std::holds_alternative<const MemberExpr *>(iter->scope)) {
+                if (const clang::ValueDecl *MD = std::get<const MemberExpr *>(iter->scope)->getMemberDecl()) {
+                    return llvm::dyn_cast<clang::CXXRecordDecl>(MD->getDeclContext());
+                }
+            }
+            iter++;
+        }
+        return nullptr;
+    }
+
+    bool checkExternalName(const std::string &name, const std::string &qual, const SourceLocation loc, const CXXRecordDecl *parent);
 
     inline bool testInplaceCaller() {
 
@@ -305,12 +337,12 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
 
         const CallExpr *call = nullptr;
         if (std::holds_alternative<const MemberExpr *>(scope)) {
-            //                llvm::outs() << "getMemberNameInfo(): " << std::get<const MemberExpr *>(scope)->getMemberDecl()->getNameAsString() << "\n";
+
             return std::get<const MemberExpr *>(scope)->getMemberNameInfo().getAsString();
 
         } else if (std::holds_alternative<const FunctionDecl *>(scope)) {
 
-            return std::get<const FunctionDecl *>(scope)->getNameAsString();
+            return std::get<const FunctionDecl *>(scope)->getQualifiedNameAsString();
 
         } else if (std::holds_alternative<const CXXMemberCallExpr *>(scope)) {
             call = std::get<const CXXMemberCallExpr *>(scope);
@@ -359,16 +391,38 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
         return "";
     }
 
-    std::string getClassName() {
-        auto iter = rbegin();
-        while (iter != rend()) {
-            if (std::holds_alternative<const CXXRecordDecl *>(iter->scope)) {
-                return std::get<const CXXRecordDecl *>(iter->scope)->getQualifiedNameAsString();
-            }
-            iter++;
-        }
-        return "";
-    }
+    // Scope *getParentClass(const clang::CXXRecordDecl **decl = nullptr) {
+    //     auto iter = rbegin();
+    //     while (iter != rend()) {
+    //         if (std::holds_alternative<const MemberExpr *>(iter->scope)) {
+    //             if (const clang::ValueDecl *MD = std::get<const MemberExpr *>(iter->scope)->getMemberDecl()) {
+    //                 if (decl) {
+    //                     *decl = llvm::dyn_cast<clang::CXXRecordDecl>(MD->getDeclContext());
+    //                 }
+    //                 return &*iter;
+    //             }
+    //             break;
+    //         }
+    //         iter++;
+    //     }
+    //     if (decl) {
+    //         *decl = nullptr;
+    //     }
+    //     return nullptr;
+    // }
+    // const CXXRecordDecl *getCXXRecordDecl() {
+    //     auto iter = rbegin();
+    //     while (iter != rend()) {
+    //         if (std::holds_alternative<const MemberExpr *>(iter->scope)) {
+    //             if (const clang::ValueDecl *MD = std::get<const MemberExpr *>(iter->scope)->getMemberDecl()) {
+    //                 return llvm::dyn_cast<clang::CXXRecordDecl>(MD->getDeclContext());
+    //             }
+    //             break;
+    //         }
+    //         iter++;
+    //     }
+    //     return nullptr;
+    // }
 
     SourceLocation testArgument() {
         auto iter = rbegin();
@@ -381,12 +435,9 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
         return SourceLocation();
     }
 
-    void PushScope(SourceLocation loc, LifeTime::ScopeType call = std::monostate(), SourceLocation unsafe = SourceLocation()) {
-        push_back(LifeTime(loc, call, unsafe));
-    }
-
     void PopScope() {
         assert(size() > 1); // First level reserved for static objects
+        Verbose(back().endLoc, std::format("end {}: {}", size()-1, getName(back().scope)), TAG_liftime);
         pop_back();
     }
 
@@ -394,6 +445,10 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
         assert(size()); // First level reserved for static objects
         return std::deque<LifeTime>::back();
     }
+
+    size_t size() const { return std::deque<LifeTime>::size(); }
+
+    template <class... Args> reference emplace_back(Args &&...args) { return std::deque<LifeTime>::emplace_back(args...); }
 
     void AddVarDecl(const VarDecl *decl, const char *type, std::string name = "") {
         assert(decl);
@@ -444,8 +499,8 @@ class LifeTimeScope : SCOPE(protected) std::deque<LifeTime> { // use deque inste
         auto iter = begin();
         while (iter != end()) {
 
-            if (iter->location.isValid()) {
-                result += iter->location.printToString(m_CI.getSourceManager());
+            if (iter->startLoc.isValid()) {
+                result += iter->startLoc.printToString(m_CI.getSourceManager());
 
                 std::string name = getName(iter->scope);
                 if (!name.empty()) {
@@ -565,13 +620,16 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     static inline const char *PRINT_AST = TRUST_KEYWORD_PRINT_AST;
     static inline const char *PRINT_DUMP = TRUST_KEYWORD_PRINT_DUMP;
 
+    static inline const char *PURE = TRUST_KEYWORD_PURE;
+    static inline const char *USING_EXTERNAL = TRUST_KEYWORD_USING_EXTERNAL;
+
     static inline const char *STATUS_ENABLE = TRUST_KEYWORD_ENABLE;
     static inline const char *STATUS_DISABLE = TRUST_KEYWORD_DISABLE;
     static inline const char *STATUS_PUSH = TRUST_KEYWORD_PUSH;
     static inline const char *STATUS_POP = TRUST_KEYWORD_POP;
 
-    std::set<std::string> m_listFirstArg{PROFILE,         STATUS,       LEVEL,      UNSAFE,    SHARED_TYPE, AUTO_TYPE,
-                                         INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE, PRINT_AST, PRINT_DUMP};
+    std::set<std::string> m_listFirstArg{PROFILE,   STATUS,          LEVEL,        PURE,       USING_EXTERNAL, UNSAFE,    SHARED_TYPE,
+                                         AUTO_TYPE, INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE, PRINT_AST,      PRINT_DUMP};
     std::set<std::string> m_listStatus{STATUS_ENABLE, STATUS_DISABLE, STATUS_PUSH, STATUS_POP};
     std::set<std::string> m_listLevel{ERROR, WARNING, NOTE, REMARK, IGNORED};
 
@@ -616,11 +674,19 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     SourceLocation m_dump_location;
     SourceLocation m_trace_location;
 
+    // std::map<std::string, const CXXRecordDecl *> m_class_attr;
+    struct RestrictData {
+        bool isPure;
+        StringMatcher matcher;
+    };
+    std::map<std::string, RestrictData> m_class_restrict;
+
     const CompilerInstance &m_CI;
 
     TrustPlugin(const CompilerInstance &instance) : m_CI(instance), m_scopes(instance) {
         // Zero level for static variables
-        m_scopes.PushScope(SourceLocation(), std::monostate(), SourceLocation());
+        // m_scopes.PushScope(SourceLocation(), std::monostate(), SourceLocation());
+        MakeScope(SourceLocation(), SourceLocation(), std::monostate());
 
         m_diagnostic_level = clang::DiagnosticsEngine::Level::Error;
         m_level_non_const_method = clang::DiagnosticsEngine::Level::Error;
@@ -636,14 +702,14 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     }
 
     void dump(raw_ostream &out) {
-        out << "\nverbose: plugin-config\n";
-        out << "verbose: error-type: " << makeHelperString(m_error_type) << "\n";
-        out << "verbose: warning-type: " << makeHelperString(m_warning_type) << "\n";
-        out << "verbose: " TRUST_KEYWORD_AUTO_TYPE ": " << makeHelperString(m_auto_type) << "\n";
-        out << "verbose: " TRUST_KEYWORD_SHARED_TYPE ": " << makeHelperString(m_shared_type) << "\n";
-        out << "verbose: not-shared-classes: " << makeHelperString(m_not_shared_class) << "\n";
-        out << "verbose: " TRUST_KEYWORD_INVALIDATE_FUNC ": " << makeHelperString(m_invalidate_func) << "\n";
-        out << "\n";
+        std::string config("config");
+        Verbose(SourceLocation(), "plugin-config", config);
+        Verbose(SourceLocation(), std::format("error-type: {}", makeHelperString(m_error_type)), config);
+        Verbose(SourceLocation(), std::format("warning-type: {}", makeHelperString(m_warning_type)), config);
+        Verbose(SourceLocation(), std::format(TRUST_KEYWORD_AUTO_TYPE ": {}", makeHelperString(m_auto_type)), config);
+        Verbose(SourceLocation(), std::format(TRUST_KEYWORD_SHARED_TYPE ": {}", makeHelperString(m_shared_type)), config);
+        Verbose(SourceLocation(), std::format("not-shared-classes: {}", makeHelperString(m_not_shared_class)), config);
+        Verbose(SourceLocation(), std::format(TRUST_KEYWORD_INVALIDATE_FUNC ": {}", makeHelperString(m_invalidate_func)), config);
     }
 
     clang::DiagnosticsEngine::Level getLevel(clang::DiagnosticsEngine::Level original) {
@@ -732,7 +798,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         if (first.empty() || second.empty()) {
             if (first.compare(PROFILE) == 0) {
                 clear();
-            } else if (first.compare(UNSAFE) == 0 || first.compare(PRINT_AST) == 0 || first.compare(PRINT_DUMP) == 0) {
+            } else if (first.compare(UNSAFE) == 0 || first.compare(PRINT_AST) == 0 || first.compare(PURE) == 0 || first.compare(PRINT_DUMP) == 0) {
                 // The second argument may be empty
             } else {
                 result = "Two string literal arguments expected!";
@@ -1204,29 +1270,50 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
      */
     inline bool isEnabled() { return isEnabledStatus() && !scaner; }
 
-    SourceLocation checkUnsafeBlock(const AttributedStmt *attrStmt) {
+    void MakeScope(SourceLocation start, SourceLocation stop, LifeTime::ScopeType call, ArrayRef<const Attr *> attr = ArrayRef<const Attr *>(),
+                   bool top = true) {
 
-        if (attrStmt) {
+        const CXXRecordDecl **cxx = std::get_if<const CXXRecordDecl *>(&call);
+        Verbose(start, std::format("start {}: {}  {}", m_scopes.size(), LifeTimeScope::getName(call), cxx ? (*cxx)->getQualifiedNameAsString() : ""),
+                LifeTimeScope::TAG_liftime);
 
-            auto attrs = attrStmt->getAttrs();
+        auto &last = m_scopes.emplace_back(LifeTime(start, stop, call, top));
 
-            for (auto &elem : attrs) {
+        for (auto &elem : attr) {
 
-                std::pair<std::string, std::string> pair = parseAttr(dyn_cast_or_null<AnnotateAttr>(elem));
-                if (pair != pair_empty) {
+            std::pair<std::string, std::string> pair = parseAttr(dyn_cast_or_null<AnnotateAttr>(elem));
+            if (pair != pair_empty) {
 
-                    if (pair.first.compare(UNSAFE) == 0) {
+                if (pair.first.compare(UNSAFE) == 0) {
 
-                        AttrComplete(elem->getLocation());
+                    last.unsafeLoc = elem->getLocation();
+                    AttrComplete(last.unsafeLoc);
+                    Verbose(last.unsafeLoc, "Unsafe statement");
 
-                        Verbose(attrStmt->getBeginLoc(), "Unsafe statement"); //, attrStmt->getBeginLoc());
+                } else if (pair.first.compare(PURE) == 0) {
 
-                        return elem->getLocation();
+                    last.pureLoc = elem->getLocation();
+                    if (cxx) {
+                        m_class_restrict[(*cxx)->getQualifiedNameAsString()].isPure = true;
+                        Verbose(start, std::format("Set pure restriction for {}", (*cxx)->getQualifiedNameAsString()));
+                    } else {
+                        Verbose(last.pureLoc, "Pure element");
                     }
+                    AttrComplete(last.pureLoc);
+
+                } else if (pair.first.compare(USING_EXTERNAL) == 0) {
+
+                    last.globalsMatcher = StringMatcher(pair.second);
+                    if (cxx) {
+                        m_class_restrict[(*cxx)->getQualifiedNameAsString()].matcher = last.globalsMatcher;
+                        Verbose(start, std::format("Set restriction name '{}' for {}", pair.second, (*cxx)->getQualifiedNameAsString()));
+                    } else {
+                        Verbose(elem->getLocation(), std::format("Using globals '{}'", pair.second));
+                    }
+                    AttrComplete(elem->getLocation());
                 }
             }
         }
-        return SourceLocation();
     }
 
     std::pair<std::string, std::string> parseAttr(const AnnotateAttr *const attr) {
@@ -1345,79 +1432,79 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         return false;
     }
 
-    // void printDumpIfEnabled(const Decl *decl) {
-    //     if (!decl || !isEnabledStatus() || m_dump_matcher.isEmpty() || skipLocation(m_dump_location, decl->getLocation())) {
-    //         return;
-    //     }
+    void printDumpIfEnabled(const Decl *decl) {
+        if (!decl || !isEnabledStatus() || m_dump_matcher.isEmpty() || skipLocation(m_dump_location, decl->getLocation())) {
+            return;
+        }
 
-    //     // Source location for IDE
-    //     llvm::outs() << decl->getLocation().printToString(m_CI.getSourceManager());
-    //     // Color highlighting
-    //     llvm::outs() << "  \033[1;46;34m";
-    //     // The string at the current position to expand the AST
+        // Source location for IDE
+        llvm::outs() << decl->getLocation().printToString(m_CI.getSourceManager());
+        // Color highlighting
+        llvm::outs() << "  \033[1;46;34m";
+        // The string at the current position to expand the AST
 
-    //     PrintingPolicy Policy(m_CI.getASTContext().getPrintingPolicy());
-    //     Policy.SuppressScope = false;
-    //     Policy.AnonymousTagLocations = true;
+        PrintingPolicy Policy(m_CI.getASTContext().getPrintingPolicy());
+        Policy.SuppressScope = false;
+        Policy.AnonymousTagLocations = true;
 
-    //     //@todo Create Dump filter
-    //     std::string output;
-    //     llvm::raw_string_ostream str(output);
-    //     decl->print(str, Policy);
+        //@todo Create Dump filter
+        std::string output;
+        llvm::raw_string_ostream str(output);
+        decl->print(str, Policy);
 
-    //     size_t pos = output.find("\n");
-    //     if (pos == std::string::npos) {
-    //         llvm::outs() << output;
-    //     } else {
-    //         llvm::outs() << output.substr(0, pos - 1);
-    //     }
+        size_t pos = output.find("\n");
+        if (pos == std::string::npos) {
+            llvm::outs() << output;
+        } else {
+            llvm::outs() << output.substr(0, pos - 1);
+        }
 
-    //     // Close color highlighting
-    //     llvm::outs() << "\033[0m ";
-    //     llvm::outs() << " dump:\n";
+        // Close color highlighting
+        llvm::outs() << "\033[0m ";
+        llvm::outs() << " dump:\n";
 
-    //     // Ast tree for current line
-    //     const ASTContext &Ctx = m_CI.getASTContext();
-    //     ASTDumper P(llvm::outs(), Ctx, /*ShowColors=*/true);
-    //     P.Visit(decl); // dyn_cast<Decl>(decl)
-    // }
+        // Ast tree for current line
+        const ASTContext &Ctx = m_CI.getASTContext();
+        ASTDumper P(llvm::outs(), Ctx, /*ShowColors=*/true);
+        P.Visit(decl); // dyn_cast<Decl>(decl)
+    }
 
-    // void printDumpIfEnabled(const Stmt *stmt) {
-    //     if (!stmt || !isEnabledStatus() || m_dump_matcher.isEmpty() || skipLocation(m_dump_location, stmt->getBeginLoc())) {
-    //         return;
-    //     }
+    void printDumpIfEnabled(const Stmt *stmt) {
+        if (!stmt || !isEnabledStatus() || m_dump_matcher.isEmpty() || skipLocation(m_dump_location, stmt->getBeginLoc())) {
+            return;
+        }
 
-    //     // Source location for IDE
-    //     llvm::outs() << stmt->getBeginLoc().printToString(m_CI.getSourceManager());
-    //     // Color highlighting
-    //     llvm::outs() << "  \033[1;46;34m";
-    //     // The string at the current position to expand the AST
+        // Source location for IDE
+        llvm::outs() << stmt->getBeginLoc().printToString(m_CI.getSourceManager());
+        // Color highlighting
+        llvm::outs() << "  \033[1;46;34m";
+        // The string at the current position to expand the AST
 
-    //     PrintingPolicy Policy(m_CI.getASTContext().getPrintingPolicy());
-    //     Policy.SuppressScope = false;
-    //     Policy.AnonymousTagLocations = true;
+        PrintingPolicy Policy(m_CI.getASTContext().getPrintingPolicy());
+        Policy.SuppressScope = false;
+        Policy.AnonymousTagLocations = true;
 
-    //     //@todo Create Dump filter
-    //     std::string output;
-    //     llvm::raw_string_ostream str(output);
-    //     stmt->printPretty(str, nullptr, Policy);
+        //@todo Create Dump filter
+        std::string output;
+        llvm::raw_string_ostream str(output);
+        stmt->printPretty(str, nullptr, Policy);
 
-    //     size_t pos = output.find("\n");
-    //     if (pos == std::string::npos) {
-    //         llvm::outs() << output;
-    //     } else {
-    //         llvm::outs() << output.substr(0, pos - 1);
-    //     }
+        size_t pos = output.find("\n");
+        if (pos == std::string::npos) {
+            llvm::outs() << output;
+        } else {
+            llvm::outs() << output.substr(0, pos - 1);
+        }
 
-    //     // Close color highlighting
-    //     llvm::outs() << "\033[0m ";
-    //     llvm::outs() << " dump:\n";
+        // Close color highlighting
+        llvm::outs() << "\033[0m ";
+        llvm::outs() << " dump:\n";
 
-    //     // Ast tree for current line
-    //     const ASTContext &Ctx = m_CI.getASTContext();
-    //     ASTDumper P(llvm::outs(), Ctx, /*ShowColors=*/true);
-    //     P.Visit(stmt); // dyn_cast<Decl>(decl)
-    // }
+        // Ast tree for current line
+        const ASTContext &Ctx = m_CI.getASTContext();
+        ASTDumper P(llvm::outs(), Ctx, /*ShowColors=*/true);
+        P.Visit(stmt); // dyn_cast<Decl>(decl)
+    }
 
     /*
      *
@@ -1539,6 +1626,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             clang::Expr::Classification cls = ref->ClassifyModifiable(m_CI.getASTContext(), cur_location);
             //                Expr::isModifiableLvalueResult mod = ref->isModifiableLvalue(m_CI.getSourceManager(), ref->getLocation());
             //                llvm::outs() << "isModifiable(): " << cls.getModifiable() << "\n";
+
+            m_scopes.checkExternalName(ref_name, ref->getDecl()->getQualifiedNameAsString(), cur_location, m_scopes.getParent());
 
             auto found = m_scopes.findBlocker(ref_name);
             if (found != LifeTime::BlockerEnd) {
@@ -1836,7 +1925,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 #define TRAVERSE_CONTEXT(name)                                                                                                                                 \
     bool Traverse##name(name *arg) {                                                                                                                           \
         if (isEnabledStatus()) {                                                                                                                               \
-            m_scopes.PushScope(arg->getEndLoc(), arg);                                                                                                         \
+            const AttributedStmt *attr = dyn_cast_or_null<AttributedStmt>(arg);                                                                                \
+            MakeScope(arg->getBeginLoc(), arg->getEndLoc(), arg, attr ? attr->getAttrs() : ArrayRef<const Attr *>());                                          \
             RecursiveASTVisitor<TrustPlugin>::Traverse##name(arg);                                                                                             \
             m_scopes.PopScope();                                                                                                                               \
         }                                                                                                                                                      \
@@ -1856,10 +1946,11 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
     bool TraverseCXXRecordDecl(CXXRecordDecl *decl) {
 
-        if (isEnabledStatus() && decl->hasDefinition()) {
+        if (isEnabledStatus() && decl->hasDefinition() && !decl->isImplicit()) {
 
             if (!scaner) {
-                m_scopes.PushScope(decl->getLocation(), decl, m_scopes.testUnsafe());
+                MakeScope(decl->getLocation(), clang::SourceLocation(), decl,
+                          decl->hasAttrs() ? ArrayRef<const Attr *>(decl->getAttrs()) : ArrayRef<const Attr *>());
             }
 
             if (m_is_cyclic_analysis) {
@@ -2040,14 +2131,16 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             if (const DeclStmt *decl = dyn_cast_or_null<DeclStmt>(stmt)) {
                 // checkDumpFilter(decl->getSingleDecl());
             }
-            // printDumpIfEnabled(stmt);
+            printDumpIfEnabled(stmt);
 
             const AttributedStmt *attrStmt = dyn_cast_or_null<AttributedStmt>(stmt);
             const CompoundStmt *block = dyn_cast_or_null<CompoundStmt>(stmt);
 
             if (isEnabled() && (attrStmt || block)) {
 
-                m_scopes.PushScope(stmt->getEndLoc(), std::monostate(), checkUnsafeBlock(attrStmt));
+                // m_scopes.PushScope(stmt->getEndLoc(), std::monostate(), checkUnsafeBlock(attrStmt));
+
+                MakeScope(stmt->getBeginLoc(), stmt->getEndLoc(), std::monostate(), attrStmt ? attrStmt->getAttrs() : ArrayRef<const Attr *>(), false);
 
                 RecursiveASTVisitor<TrustPlugin>::TraverseStmt(stmt);
 
@@ -2069,21 +2162,26 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
      */
     bool TraverseDecl(Decl *D) {
 
-        // checkDumpFilter(D);
+        checkDumpFilter(D);
         checkDeclAttributes(D);
-        // printDumpIfEnabled(D);
+        printDumpIfEnabled(D);
 
         if (const FunctionDecl *func = dyn_cast_or_null<FunctionDecl>(D)) {
 
             if (isEnabled() && func->isDefined()) {
 
-                m_scopes.PushScope(D->getLocation(), func, m_scopes.testUnsafe());
+                // m_scopes.PushScope(D->getLocation(), func, m_scopes.testUnsafe(), m_scopes.testPure());
+                MakeScope(D->getLocation(), clang::SourceLocation(), func,
+                          func->hasAttrs() ? ArrayRef<const Attr *>(func->getAttrs()) : ArrayRef<const Attr *>());
 
                 RecursiveASTVisitor<TrustPlugin>::TraverseDecl(D);
 
                 m_scopes.PopScope();
                 return true;
             }
+            // } else if (D->isStructureOrClass()) {
+            //     llvm::errs() << "isStructureOrClass(): " << "\n";
+            //     D->getQualifier()->dump(llvm::errs());
         }
 
         // Enabling and disabling the plugin is implemented using declarations,
@@ -2093,6 +2191,67 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         return true;
     }
 };
+
+bool LifeTimeScope::checkExternalName(const std::string &name, const std::string &qual, const SourceLocation loc, const CXXRecordDecl *parent) {
+    bool matching = false;
+    auto iter = rbegin();
+
+    llvm::errs() << "checkExternalName(): " << qual << "\n";
+
+    // Scope *cxx = getParentClass();
+    // const CXXRecordDecl *cxx = getParent();
+    // if (parent) {
+    //     llvm::errs() << "getParentClass(): " << name << "  " << parent->getQualifiedNameAsString() << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+    // }
+
+    while (iter != rend()) {
+
+        // if (iter->member) {
+        //     llvm::errs() << "NAME: " << name << " MEMBER for " << iter->member->getQualifiedNameAsString() << "!!!!!!!!!!!!!!!!!\n";
+        // }
+
+        if (iter->unsafeLoc.isValid()) {
+            // Verbose(iter->unsafeLoc, "Unsafe block found!");
+            return true;
+        }
+        if ((*iter).vars.find(name) != (*iter).vars.end() || (*iter).other.find(name) != (*iter).other.end()) {
+            // Verbose(loc, std::format("Found local variable '{}'!", name));
+            return true;
+        }
+        if (!iter->globalsMatcher.isEmpty()) {
+            matching = true;
+            if (iter->globalsMatcher.MatchesName(name) || iter->globalsMatcher.MatchesName(qual)) {
+                Verbose(loc, std::format("Variable name '{}' matches pattern!", name));
+                return true;
+            }
+        }
+        if (iter->pureLoc.isValid()) {
+            plugin->LogError(loc, std::format("Access to external variable '{}' from within a pure block is prohibited!", name));
+            return false;
+        }
+
+        // if (cxx && (cxx->globalsMatcher.MatchesName(name) || cxx->globalsMatcher.MatchesName(qual))) {
+        //     Verbose(loc, std::format("Variable name '{}' matches pattern for class!", name));
+        //     return true;
+        // }
+
+        if (iter->top_level) {
+
+            // if(iter->member){
+            //     llvm::errs() << "Methond: " << name << " MEMBER for " << iter->member->getQualifiedNameAsString() << "!!!!!!!!!!!!!!!!!\n";
+            // }
+
+            if (matching) {
+                plugin->LogError(loc, std::format("Variable name '{}' does not match patterns!!", name));
+                return false;
+            }
+
+            break;
+        }
+        iter++;
+    }
+    return true;
+}
 
 /*
  *
@@ -2107,6 +2266,12 @@ class TrustPluginASTConsumer : public ASTConsumer {
 
         context.getParentMapContext().setTraversalKind(clang::TraversalKind::TK_IgnoreUnlessSpelledInSource);
         plugin->TraverseDecl(context.getTranslationUnitDecl());
+
+        for (auto &attr : m_attrs) {
+            if (!attr.second) {
+                plugin->LogError(attr.first, "Attribute not processed!");
+            }
+        }
 
         if (scaner) {
             if (context.getDiagnostics().hasErrorOccurred()) {
@@ -2270,7 +2435,12 @@ class TrustPluginASTAction : public PluginASTAction {
                     // PrintColor(llvm::outs(), "Enable dump and process logger");
 
                     is_verbose = true;
-                    PrintColor(llvm::outs(), "Verbose mode enabled");
+                    if (second.empty()) {
+                        PrintColor(llvm::outs(), "Verbose mode enabled");
+                    } else {
+                        VerboseMatcher = StringMatcher(second);
+                        PrintColor(llvm::outs(), "Verbose mode enabled for pattern: '{}'", second);
+                    }
 
                 } else if (first.compare("circleref-disable") == 0) {
 
@@ -2316,9 +2486,15 @@ class TrustPluginASTAction : public PluginASTAction {
     }
 };
 
-void Verbose(SourceLocation loc, std::string_view msg) {
+void Verbose(SourceLocation loc, std::string_view msg, const std::string &tag) {
     if (is_verbose && plugin) {
-        llvm::outs() << LocToStr(loc, plugin->m_CI.getSourceManager()) << ": verbose: " << msg.begin() << "\n";
+        if (VerboseMatcher.MatchesName(tag) || tag.empty()) {
+            llvm::outs() << LocToStr(loc, plugin->m_CI.getSourceManager()) << ": verbose";
+            if (!tag.empty()) {
+                llvm::outs() << "(" << tag << ")";
+            }
+            llvm::outs() << ": " << msg.begin() << "\n";
+        }
     }
 }
 

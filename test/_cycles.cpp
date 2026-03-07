@@ -17,6 +17,8 @@
 // CHECK: Verbose mode enabled
 // CHECK: Write the circular reference analysis data to file {{.*}}/temp/circleref.trust
 // CHECK-NOT: fatal error
+// CHECK-NOT: error: clang frontend command failed 
+// CHECK-NOT: error: Attribute not processed!
 
 #include "trusted-cpp.h"
 #include <algorithm>

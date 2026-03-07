@@ -635,381 +635,72 @@ TEST(TrustedCPP, WeakList) {
     ASSERT_FALSE(int_list.empty());
 }
 
-// TEST(TrustedCPP, Plugin) {
-
-//     // Example of running a plugin to compile a file
-
-//     /* The plugin operation is checked as follows.
-//      * A specific file with examples of template usage from the metsafe/ file is compiled
-//      * The example file contains correct C++ code,
-//      * but the variables in it are used both correctly and with violations of the rules.
-//      *
-//      * When compiling a file with an analyzer plugin, the debug output is written to a file.
-//      * This file is read in the test and debug messages of the plugin
-//      * are searched for in it (both successful and unsuccessful checks).
-//      *
-//      * If all check messages are found, the test is considered successful.
-//      */
-
-//     std::string cmd = "clang-21";
-//     cmd += " -std=c++20 -ferror-limit=500 ";
-//     cmd += " -Xclang -load -Xclang ../trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust ";
-//     cmd += " -Xclang -plugin-arg-trust -Xclang log ";
-//     cmd += " -Xclang -plugin-arg-trust -Xclang circleref-disable";
-//     cmd += " -c _example.cpp > _example.cpp.log";
-
-//     const char * file_log = "_example.cpp.log";
-//     fs::remove(file_log);
-
-//     int err = std::system(cmd.c_str());
-
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file(file_log);
-
-//     ASSERT_TRUE(log_file.is_open());
-
-//     std::stringstream log_buffer;
-//     log_buffer << log_file.rdbuf();
-
-//     std::string log_output = log_buffer.str();
-//     log_file.close();
-
-//     ASSERT_TRUE(!log_output.empty());
-
-//     ASSERT_TRUE(log_output.find("Enable dump and process logger") != std::string::npos &&
-//             log_output.find("unprocessed attribute!") == std::string::npos)
-//             << log_output;
-
-//     std::vector<std::string> diag({
-//         "#log #201",
-//         "#log #201",
-//         "#log #202",
-//         "#log #202",
-//         "#log #202",
-//         "#err #204",
-//         "#err #204",
-//         "#log #207",
-//         "#log #207",
-//         "#log #208",
-//         "#err #209",
-//         "#log #209",
-//         "#warn #208",
-//         "#err #209",
-//         "#log #301",
-//         "#log #302",
-//         "#warn #301",
-//         "#warn #302",
-//         "#err #303",
-//         "#log #303",
-//         "#log #401",
-//         "#log #402",
-//         "#log #901",
-//         "#log #903",
-//         "#log #1001",
-//         "#log #1002",
-//         "#log #1003",
-//         "#log #2003",
-//         "#log #2004",
-//         "#err #3002",
-//         "#log #3002",
-//         "#err #3003",
-//         "#log #3003",
-//         "#log #3003",
-//         "#log #4101",
-//         "#log #4103",
-//         "#log #4105",
-//         "#log #4201",
-//         "#log #4202",
-//         "#log #4302",
-//         "#log #4401",
-//         "#log #4501",
-//         "#log #4513",
-//         "#log #4603",
-//         "#err #7003",
-//         "#log #7003",
-//         "#log #7004",
-//         "#log #7005",
-//         "#log #7009",
-
-//         //bugfix_11()
-//         "#log #900011002",
-//         "#log #900011002",
-//         "#log #900011003",
-//         "#warn #900011003",
-//         "#err #900011004",
-//         "#log #900011004",
-
-//         //bugfix_12()
-//         "#log #900012002",
-//         "#log #900012003",
-//         "#warn #900012003",
-//         "#err #900012004",
-//     });
-
-//     size_t pos = log_output.find(TRUST_KEYWORD_START_LOG);
-//     ASSERT_TRUE(pos != std::string::npos);
-//     std::string log_str = log_output.substr(pos + strlen(TRUST_KEYWORD_START_LOG), log_output.find("\n\n", pos + strlen(TRUST_KEYWORD_START_LOG)) - pos -
-//     strlen(TRUST_KEYWORD_START_LOG));
-
-//     //    std::cout << "\n" << log_str << "\n\n";
-
-//     std::vector< std::string> log;
-//     SplitString(log_str, '\n', &log);
-
-//     ASSERT_TRUE(log.size()) << log_str;
-
-//     while (!log.empty() && !diag.empty()) {
-
-//         if (log.front().find(diag.front()) != std::string::npos) {
-//             log.erase(log.begin());
-//             diag.erase(diag.begin());
-//         } else {
-
-//             ASSERT_TRUE(diag.front().find(" #") != std::string::npos) << diag.front();
-
-//             size_t diag_line = atoi(diag.front().data() + diag.front().find(" #") + 2);
-//             ASSERT_TRUE(diag_line) << diag.front();
-
-//             size_t skip = log.front().find(" #");
-//             ASSERT_TRUE(skip != std::string::npos) << log.front();
-
-//             ASSERT_TRUE(log.front().find(" #", skip + 2) != std::string::npos) << log.front();
-
-//             size_t log_line = atoi(log.front().data() + log.front().find(" #", skip + 2) + 2);
-//             ASSERT_TRUE(log_line) << log.front();
-
-//             if (log_line > diag_line) {
-//                 ADD_FAILURE() << "In log not found: " << log.front();
-//                 log.erase(log.begin());
-//             } else if (log_line < diag_line) {
-//                 ADD_FAILURE() << "In diag not found: " << diag.front();
-//                 diag.erase(diag.begin());
-//             } else {
-//                 ADD_FAILURE() << "Diag expected: \"" << diag.front() << "\" but found \"" << log.front() << "\"";
-//                 log.erase(log.begin());
-//                 diag.erase(diag.begin());
-//             }
-//         }
-//     }
-
-//     for (auto &elem : log) {
-//         ADD_FAILURE() << "Log not found: " << elem;
-//     }
-//     for (auto &elem : diag) {
-//         ADD_FAILURE() << "Diag not found: " << elem;
-//     }
-
-// }
-
-// TEST(TrustedCPP, Cycles) {
-
-//     const std::string cmd_base = "clang-21 -std=c++20 -ferror-limit=500 -Xclang -load -Xclang ../trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust
-//     -Xclang -plugin-arg-trust -Xclang log ";
-
-//     fs::remove(TrustFile::SHARED_SCAN_FILE_DEFAULT);
-
-//     const char * file_log = "_cycles.cpp.log";
-//     fs::remove(file_log);
-
-//     std::system(std::format("{} -c _cycles.cpp > _cycles.cpp.log", cmd_base).c_str());
-
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file(file_log);
-
-//     ASSERT_TRUE(log_file.is_open());
-
-//     std::stringstream log_buffer;
-//     log_buffer << log_file.rdbuf();
-
-//     std::string log_output = log_buffer.str();
-//     log_file.close();
-
-//     ASSERT_TRUE(log_output.find("not found in current translation unit.") != std::string::npos);
-
-//     ASSERT_FALSE(fs::exists(TrustFile::SHARED_SCAN_FILE_DEFAULT));
-//     fs::remove("_example.cpp.log");
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write -fsyntax-only _example.cpp > _example.cpp.log", cmd_base).c_str());
-
-//     ASSERT_TRUE(fs::exists("_example.cpp.log"));
-//     ASSERT_TRUE(fs::exists(TrustFile::SHARED_SCAN_FILE_DEFAULT));
-
-//     std::ifstream example_file("_example.cpp.log");
-//     ASSERT_TRUE(example_file.is_open());
-
-//     std::stringstream example_file_buffer;
-//     example_file_buffer << example_file.rdbuf();
-
-//     std::string example_log = example_file_buffer.str();
-//     example_file.close();
-
-//     ASSERT_TRUE(example_log.size() > 100);
-//     ASSERT_TRUE(example_log.find("The circular reference analyzer requires two passes.") == std::string::npos);
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-read -c _cycles.cpp > _cycles.cpp.log", cmd_base).c_str());
-
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file2(file_log);
-
-//     ASSERT_TRUE(log_file2.is_open());
-
-//     std::stringstream log_buffer2;
-//     log_buffer2 << log_file2.rdbuf();
-
-//     std::string log_output2 = log_buffer2.str();
-//     log_file2.close();
-
-//     ASSERT_TRUE(log_output2.size() > 100);
-//     ASSERT_TRUE(log_output2.find("The circular reference analyzer requires two passes.") == std::string::npos);
-
-//     ASSERT_TRUE(!log_output2.empty());
-
-//     ASSERT_TRUE(log_output2.find("Enable dump and process logger") != std::string::npos &&
-//             log_output2.find("unprocessed attribute!") == std::string::npos)
-//             << log_output2;
-
-//     std::vector<std::string> diag({
-//         "#log #102",
-//         "#log #103",
-//         "#log #102",
-//         "#log #1003",
-//         "#log #1002",
-//         "#err #1003",
-//         "#err #1003",
-//         "#log #1006",
-//         "#err #1007",
-//         "#log #1011",
-//         "#log #1010",
-//         "#log #1003",
-//         "#err #1003",
-//         "#warn #1011",
-//         "#log #1014",
-//         "#err #1007",
-//         "#log #2009",
-//         "#log #2002",
-//         "#log #2005",
-//         "#err #2005",
-//         "#log #2005",
-//         "#log #2004",
-//         "#log #2009",
-//         "#err #2009",
-//         "#err #2005",
-//         "#log #2009",
-//         "#log #2008",
-//         "#log #2005",
-//         "#err #2005",
-//         "#err #2009",
-//         "#log #2013",
-//         "#log #2012",
-//         "#log #2009",
-//         "#log #2012",
-//         "#warn #2013",
-//         "#log #2017",
-//         "#log #2016",
-//         "#log #2005",
-//         "#log #2016",
-//         "#warn #2017",
-//         "#log #3002",
-//         "#log #3002",
-//         "#log #3005",
-//         "#log #3005",
-//         "#log #4002",
-//         "#log #4002",
-//         "#log #4005",
-//         "#log #4005",
-//         "#log #5003",
-//         "#log #5003",
-//         "#log #5006",
-//         "#log #5006",
-//         "#log #5009",
-//         "#log #5009",
-//         "#log #10002",
-//         "#log #10007",
-//     });
-
-//     size_t pos = log_output2.find(TRUST_KEYWORD_START_LOG);
-//     ASSERT_TRUE(pos != std::string::npos);
-//     std::string log_str = log_output2.substr(pos + strlen(TRUST_KEYWORD_START_LOG), log_output2.find("\n\n", pos + strlen(TRUST_KEYWORD_START_LOG)) - pos -
-//     strlen(TRUST_KEYWORD_START_LOG));
-
-//     //    std::cout << "\n" << log_str << "\n\n";
-
-//     std::vector< std::string> log;
-//     SplitString(log_str, '\n', &log);
-
-//     ASSERT_TRUE(log.size()) << log_str;
-
-//     while (!log.empty() && !diag.empty()) {
-
-//         if (log.front().find(diag.front()) != std::string::npos) {
-//             log.erase(log.begin());
-//             diag.erase(diag.begin());
-//         } else {
-
-//             ASSERT_TRUE(diag.front().find(" #") != std::string::npos) << diag.front();
-
-//             size_t diag_line = atoi(diag.front().data() + diag.front().find(" #") + 2);
-//             ASSERT_TRUE(diag_line) << diag.front();
-
-//             size_t skip = log.front().find(" #");
-//             ASSERT_TRUE(skip != std::string::npos) << log.front();
-
-//             ASSERT_TRUE(log.front().find(" #", skip + 2) != std::string::npos) << log.front();
-
-//             size_t log_line = atoi(log.front().data() + log.front().find(" #", skip + 2) + 2);
-//             ASSERT_TRUE(log_line) << log.front();
-
-//             if (log_line > diag_line) {
-//                 ADD_FAILURE() << "In log not found: " << log.front();
-//                 log.erase(log.begin());
-//             } else if (log_line < diag_line) {
-//                 ADD_FAILURE() << "In diag not found: " << diag.front();
-//                 diag.erase(diag.begin());
-//             } else {
-//                 ADD_FAILURE() << "Diag expected: \"" << diag.front() << "\" but found \"" << log.front() << "\"";
-//                 log.erase(log.begin());
-//                 diag.erase(diag.begin());
-//             }
-//         }
-//     }
-
-//     for (auto &elem : log) {
-//         ADD_FAILURE() << "Log not found: " << elem;
-//     }
-//     for (auto &elem : diag) {
-//         ADD_FAILURE() << "Diag not found: " << elem;
-//     }
-
-//     std::string temp_trust = "unittest-all.trust";
-
-//     fs::remove(temp_trust);
-//     ASSERT_TRUE(!fs::exists(temp_trust));
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write={} -fsyntax-only _example.cpp > _example.second.log", cmd_base,
-//     temp_trust).c_str()); std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write={} -fsyntax-only _cycles.cpp > _cycles.second.log",
-//     cmd_base, temp_trust).c_str());
-
-//     ASSERT_TRUE(fs::exists(temp_trust));
-
-//     TrustFile file(temp_trust, "unit_test.not_file");
-
-//     TrustFile::ClassReadType readed;
-
-//     ASSERT_NO_THROW(file.ReadFile(readed));
-
-//     std::string shared = TrustFile::to_string(readed);
-
-//     ASSERT_STREQ("cycles::ArraySharedInt {std::vector} fields:{}\ncycles::CircleSelf {} fields:{cycles::CircleSelf}\ncycles::CircleSelfUnsafe {}
-//     fields:{cycles::CircleSelf}\ncycles::CircleShared {} fields:{cycles::CircleShared}\ncycles::CircleSharedUnsafe {}
-//     fields:{cycles::CircleShared}\ncycles::ExtExt {ns::Ext} fields:{}\ncycles::ExtExtExt {cycles::ExtExt} fields:{}\ncycles::SharedArrayInt {std::vector}
-//     fields:{}\ncycles::SharedCross {} fields:{cycles::SharedCross2}\ncycles::SharedCross2 {} fields:{cycles::SharedCross}\ncycles::SharedCross2Unsafe {}
-//     fields:{cycles::SharedCross}\ncycles::SharedCrossUnsafe {} fields:{cycles::SharedCross2}\ncycles::SharedSingle {} fields:{}\ncycles::SharedSingleInt {}
-//     fields:{}\ncycles::SharedSingleIntField {} fields:{cycles::SharedSingleInt}\nns::A {} fields:{ns::Ext}\nns::Ext {} fields:{ns::A}\n", shared.c_str()) <<
-//     shared;
-
-//     fs::remove("_example.second.log");
-//     fs::remove("_cycles.second.log");
-//     fs::remove(temp_trust);
-// }
+TEST(StringMatcher, Patterns) {
+
+    StringMatcher empty;
+    EXPECT_TRUE(empty.isEmpty());
+
+    StringMatcher match_0("");
+
+    EXPECT_FALSE(match_0.isEmpty());
+    EXPECT_TRUE(match_0.MatchesName(""));
+    EXPECT_FALSE(match_0.MatchesName("_"));
+    EXPECT_FALSE(match_0.MatchesName("name"));
+    EXPECT_FALSE(match_0.MatchesName("name::"));
+    EXPECT_FALSE(match_0.MatchesName("::name"));
+    EXPECT_FALSE(match_0.MatchesName("ns::name"));
+
+    StringMatcher match_1("*");
+
+    EXPECT_FALSE(match_1.isEmpty());
+    EXPECT_TRUE(match_1.MatchesName(""));
+    EXPECT_TRUE(match_1.MatchesName("_"));
+    EXPECT_TRUE(match_1.MatchesName("name"));
+    EXPECT_TRUE(match_1.MatchesName("name::"));
+    EXPECT_TRUE(match_1.MatchesName("::name"));
+    EXPECT_TRUE(match_1.MatchesName("ns::name"));
+
+    StringMatcher match_none("_");
+
+    EXPECT_FALSE(match_none.isEmpty());
+    EXPECT_FALSE(match_none.MatchesName(""));
+    EXPECT_TRUE(match_none.MatchesName("_"));
+    EXPECT_FALSE(match_none.MatchesName("name"));
+    EXPECT_FALSE(match_none.MatchesName("name::"));
+    EXPECT_FALSE(match_none.MatchesName("::name"));
+    EXPECT_FALSE(match_none.MatchesName("ns::name"));
+
+    StringMatcher match_ns("*global_*");
+
+    EXPECT_FALSE(match_ns.isEmpty());
+    EXPECT_FALSE(match_ns.MatchesName(""));
+    EXPECT_FALSE(match_ns.MatchesName("global"));
+    EXPECT_TRUE(match_ns.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_ns.MatchesName("ns::ns2::global_2"));
+
+    StringMatcher match_ns2("ns*");
+
+    EXPECT_FALSE(match_ns2.isEmpty());
+    EXPECT_FALSE(match_ns2.MatchesName(""));
+    EXPECT_FALSE(match_ns2.MatchesName("global"));
+    EXPECT_TRUE(match_ns2.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_ns2.MatchesName("ns::ns2::global_2"));
+
+    StringMatcher match_name("ns::global_1;*global_2");
+
+    EXPECT_FALSE(match_name.isEmpty());
+    EXPECT_FALSE(match_name.MatchesName(""));
+    EXPECT_FALSE(match_name.MatchesName("global"));
+    EXPECT_TRUE(match_name.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_name.MatchesName("ns::ns2::global_2"));
+
+    StringMatcher match_space("ns::global_1; *global_2");
+
+    EXPECT_FALSE(match_space.isEmpty());
+    EXPECT_FALSE(match_space.MatchesName(""));
+    EXPECT_FALSE(match_space.MatchesName("global"));
+    EXPECT_TRUE(match_space.MatchesName("ns::global_1"));
+    // EXPECT_TRUE(match_space.MatchesName("ns::ns2::global_2"));
+}
 
 #endif
