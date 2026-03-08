@@ -59,6 +59,9 @@
 #define TRUST_KEYWORD_SHARED_TYPE "shared-type"
 #define TRUST_KEYWORD_INVALIDATE_FUNC  "invalidate-func"
 
+#define TRUST_KEYWORD_USING_EXTERNAL "using-globals"
+#define TRUST_KEYWORD_PURE "pure"
+#define TRUST_KEYWORD_NOMINAL "nominal"
 
 #if defined __has_attribute
 #if __has_attribute( TRUST_KEYWORD_ATTRIBUTE )
@@ -93,6 +96,13 @@
 
 #define TRUSTED_PRINT_AST(filter) TRUSTED_ATTR(TRUST_KEYWORD_PRINT_AST, filter) void trust_stub();
 #define TRUSTED_PRINT_DUMP(filter) TRUSTED_ATTR(TRUST_KEYWORD_PRINT_DUMP, filter) void trust_stub();
+
+#define TRUST_USING_EXTERNAL(list) TRUSTED_ATTR(TRUST_KEYWORD_USING_EXTERNAL, list)
+#define TRUST_PURE TRUSTED_ATTR(TRUST_KEYWORD_PURE)
+
+#define TRUST_NOMINAL  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL)
+#define TRUST_NOMINAL_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL, list)
+
 
 /**
  * @def TRUSTED_ATTR(...)

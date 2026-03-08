@@ -151,7 +151,7 @@ struct TrustAttrInfo : public ParsedAttrInfo {
 
         // Add empty second argument
         if (Attr.getNumArgs() == 1) {
-            ArgsBuf.push_back(StringLiteral::CreateEmpty(S.Context, 0, 0, 0));
+            ArgsBuf.push_back(StringLiteral::CreateEmpty(S.Context, 0, 0, 1));
         }
 
         // Add attribute location to check after plugin processing
@@ -437,7 +437,7 @@ class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of v
 
     void PopScope() {
         assert(size() > 1); // First level reserved for static objects
-        Verbose(back().endLoc, std::format("end {}: {}", size()-1, getName(back().scope)), TAG_liftime);
+        Verbose(back().endLoc, std::format("end {}: {}", size() - 1, getName(back().scope)), TAG_liftime);
         pop_back();
     }
 
@@ -622,14 +622,15 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
     static inline const char *PURE = TRUST_KEYWORD_PURE;
     static inline const char *USING_EXTERNAL = TRUST_KEYWORD_USING_EXTERNAL;
+    static inline const char *NOMINAL_TYPE = TRUST_KEYWORD_NOMINAL;
 
     static inline const char *STATUS_ENABLE = TRUST_KEYWORD_ENABLE;
     static inline const char *STATUS_DISABLE = TRUST_KEYWORD_DISABLE;
     static inline const char *STATUS_PUSH = TRUST_KEYWORD_PUSH;
     static inline const char *STATUS_POP = TRUST_KEYWORD_POP;
 
-    std::set<std::string> m_listFirstArg{PROFILE,   STATUS,          LEVEL,        PURE,       USING_EXTERNAL, UNSAFE,    SHARED_TYPE,
-                                         AUTO_TYPE, INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE, PRINT_AST,      PRINT_DUMP};
+    std::set<std::string> m_listFirstArg{PROFILE,     STATUS,    LEVEL,           PURE,         USING_EXTERNAL, NOMINAL_TYPE, UNSAFE,
+                                         SHARED_TYPE, AUTO_TYPE, INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE,     PRINT_AST,    PRINT_DUMP};
     std::set<std::string> m_listStatus{STATUS_ENABLE, STATUS_DISABLE, STATUS_PUSH, STATUS_POP};
     std::set<std::string> m_listLevel{ERROR, WARNING, NOTE, REMARK, IGNORED};
 
@@ -659,6 +660,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
     std::set<std::string> m_warning_type;
     std::set<std::string> m_error_type;
+
+    std::set<std::string> m_nominal_types;
 
     std::vector<bool> m_status{false};
 
@@ -710,6 +713,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         Verbose(SourceLocation(), std::format(TRUST_KEYWORD_SHARED_TYPE ": {}", makeHelperString(m_shared_type)), config);
         Verbose(SourceLocation(), std::format("not-shared-classes: {}", makeHelperString(m_not_shared_class)), config);
         Verbose(SourceLocation(), std::format(TRUST_KEYWORD_INVALIDATE_FUNC ": {}", makeHelperString(m_invalidate_func)), config);
+        Verbose(SourceLocation(), std::format("nominal-type: {}", makeHelperString(m_nominal_types)), config);
     }
 
     clang::DiagnosticsEngine::Level getLevel(clang::DiagnosticsEngine::Level original) {
@@ -798,7 +802,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         if (first.empty() || second.empty()) {
             if (first.compare(PROFILE) == 0) {
                 clear();
-            } else if (first.compare(UNSAFE) == 0 || first.compare(PRINT_AST) == 0 || first.compare(PURE) == 0 || first.compare(PRINT_DUMP) == 0) {
+            } else if (first.compare(UNSAFE) == 0 || first.compare(PRINT_AST) == 0 || first.compare(PURE) == 0 || first.compare(PRINT_DUMP) == 0 ||
+                       first.compare(NOMINAL_TYPE) == 0) {
                 // The second argument may be empty
             } else {
                 result = "Two string literal arguments expected!";
@@ -855,6 +860,8 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                 m_auto_type.emplace(second.begin());
             } else if (first.compare(INVALIDATE_FUNC) == 0) {
                 m_invalidate_func.emplace(second.begin());
+            } else if (first.compare(NOMINAL_TYPE) == 0) {
+                m_nominal_types.emplace(second.begin());
             }
         }
         return result;
@@ -1912,6 +1919,29 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         return true;
     }
 
+    bool VisitTypedefDecl(const TypedefDecl *type) {
+        if (isEnabled()) {
+            auto attr_args = parseAttr(type->getAttr<AnnotateAttr>());
+            if (attr_args != pair_empty && attr_args.first.compare(NOMINAL_TYPE) == 0) {
+                std::string error_str = processArgs(attr_args.first, attr_args.second, type->getLocation());
+                Verbose(type->getLocation(), std::format("Define nominal type '{}'!", type->getQualifiedNameAsString()));
+                m_nominal_types.emplace(type->getQualifiedNameAsString());
+            }
+        }
+        return true;
+    }
+
+    std::string getFullTypedefName(clang::QualType type) {
+        // Проверяем, является ли это typedef
+        if (const clang::TypedefType *TDT = type->getAs<clang::TypedefType>()) {
+            return TDT->getDecl()->getNameAsString();
+        }
+        // Если не typedef, возвращаем обычное имя типа
+        clang::PrintingPolicy policy(m_CI.getASTContext().getLangOpts());
+        policy.FullyQualifiedName = true;
+        return type.getAsString(policy);
+    }
+
     /*
      *
      * RecursiveASTVisitor Traverse... template methods for the created plugin context
@@ -1953,35 +1983,35 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                           decl->hasAttrs() ? ArrayRef<const Attr *>(decl->getAttrs()) : ArrayRef<const Attr *>());
             }
 
-            if (m_is_cyclic_analysis) {
-                try {
+            // if (m_is_cyclic_analysis) {
+            //     try {
 
-                    ClassListType used;
-                    ClassListType fileds;
+            //         ClassListType used;
+            //         ClassListType fileds;
 
-                    // Don't add the name of the class being checked the first time,
-                    // so that circular dependencies can be detected
-                    MakeUsedClasses(*decl, used, fileds);
+            //         // Don't add the name of the class being checked the first time,
+            //         // so that circular dependencies can be detected
+            //         MakeUsedClasses(*decl, used, fileds);
 
-                    if (!scaner) {
-                        // If this is the first pass at creating a circular reference file,
-                        // it is not possible to analyze them now.
-                        if (!testSharedType(*decl, used)) {
-                            if (decl->hasDefinition()) {
-                                m_not_shared_class[decl->getQualifiedNameAsString()] = {decl, decl->getLocation()};
-                                Verbose(decl->getLocation(), std::format("Class '{}' marked as not shared", decl->getQualifiedNameAsString()));
-                            }
-                        } else {
-                            if (checkCycles(*decl, used, fileds)) {
-                                Verbose(decl->getLocation(), std::format("Class '{}' checked for cyclic references", decl->getQualifiedNameAsString()));
-                            }
-                        }
-                    }
+            //         if (!scaner) {
+            //             // If this is the first pass at creating a circular reference file,
+            //             // it is not possible to analyze them now.
+            //             if (!testSharedType(*decl, used)) {
+            //                 if (decl->hasDefinition()) {
+            //                     m_not_shared_class[decl->getQualifiedNameAsString()] = {decl, decl->getLocation()};
+            //                     Verbose(decl->getLocation(), std::format("Class '{}' marked as not shared", decl->getQualifiedNameAsString()));
+            //                 }
+            //             } else {
+            //                 if (checkCycles(*decl, used, fileds)) {
+            //                     Verbose(decl->getLocation(), std::format("Class '{}' checked for cyclic references", decl->getQualifiedNameAsString()));
+            //                 }
+            //             }
+            //         }
 
-                } catch (...) {
-                    return false;
-                }
-            }
+            //     } catch (...) {
+            //         return false;
+            //     }
+            // }
 
             RecursiveASTVisitor<TrustPlugin>::TraverseCXXRecordDecl(decl);
 
@@ -2054,6 +2084,23 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                     }
                 }
 
+                std::string type_name_from = getFullTypedefName(var->getType());
+                // LogWarning(var->getLocation(), std::format("Trace nominal {}", type_name_from));
+
+                if (dre) {
+                    std::string type_name_to = getFullTypedefName(dre->getType());
+
+                    if (type_name_from.compare(type_name_to) != 0 &&
+                        (m_nominal_types.find(type_name_from) != m_nominal_types.end() || m_nominal_types.find(type_name_to) != m_nominal_types.end())) {
+
+                        if (is_unsafe) {
+                            LogWarning(var->getLocation(), std::format("UNSAFE nominal type conversion from {} to {}", type_name_from, type_name_to));
+                        } else {
+                            LogError(var->getLocation(), "The nominal type does not support automatic conversion");
+                        }
+                    }
+                }
+
             } else if (AUTO_TYPE == found_type) {
 
                 /*
@@ -2115,7 +2162,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         if (isEnabled()) {
             m_scopes.AddVarDecl(param, checkClassNameTracking(param->getType()->getAsCXXRecordDecl()));
         }
-        return true;
+        return RecursiveASTVisitor<TrustPlugin>::TraverseParmVarDecl(param);
     }
 
     /*
