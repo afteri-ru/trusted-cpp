@@ -1,4 +1,8 @@
-#ifdef BUILD_UNITTEST
+#include <cstdio>
+#include <vector>
+#ifndef BUILD_UNITTEST
+#error "Build for unt test only"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -7,6 +11,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+
+#include "pthread.h"
 
 #include "trusted-cpp_plugin.h"
 
@@ -289,10 +295,16 @@ TEST(TrustedCPP, Class) {
     ASSERT_FALSE(cls.field_2.m_field.get());
 };
 
+unsigned long long g_count = 0;
+void * no_safe_thread() {
+    for (auto i = 0; i < 1'000'0000; ++i) {
+        ++g_count;
+    }
+    return nullptr;
+}
 TEST(TrustedCPP, Threads) {
 
     {
-        unsigned long long g_count = 0;
         std::thread t1([&]() {
             for (auto i = 0; i < 1'000'0000; ++i)
                 ++g_count;
@@ -301,10 +313,12 @@ TEST(TrustedCPP, Threads) {
             for (auto i = 0; i < 1'000'0000; ++i)
                 ++g_count;
         });
+        std::thread t3(&no_safe_thread);
         t1.join();
         t2.join();
+        t3.join();
 
-        EXPECT_NE(2'000'000, g_count);
+        EXPECT_NE(3'000'000, g_count);
     }
 
     {
@@ -703,4 +717,93 @@ TEST(StringMatcher, Patterns) {
     // EXPECT_TRUE(match_space.MatchesName("ns::ns2::global_2"));
 }
 
-#endif
+uint64_t notrust_count = 0;
+[[clang::optnone]] void *thread_notrust(void *arg) { // Без установки атрибута  THREAD
+
+    for (int64_t i = 0; i < 1'000'0000; i++) {
+        ++notrust_count; // Гонка
+    }
+    return nullptr;
+}
+
+int64_t run_therad_not_safe(int count_thread) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr); // дефолтные значения атрибутов
+
+    std::vector<pthread_t> threads(count_thread);
+
+    for (pthread_t &tid : threads) {
+        pthread_create(&tid, &attr, thread_notrust, nullptr); // OK
+    }
+
+    for (pthread_t &tid : threads) {
+        pthread_join(tid, nullptr);
+    }
+
+    return notrust_count;
+}
+
+TEST(PThread, NOTRUST) {
+
+    ASSERT_EQ(1'000'0000, run_therad_not_safe(1));
+    ASSERT_NE(3'000'0000, run_therad_not_safe(2));
+    ASSERT_NE(6'000'0000, run_therad_not_safe(3));
+}
+
+std::atomic<uint64_t> trust_count = 0;
+[[clang::optnone]] void *thread_trust(void *arg) { // Без установки атрибута  THREAD
+
+    for (int64_t i = 0; i < 1'000'0000; i++) {
+        trust_count++;
+    }
+    return nullptr;
+}
+
+int64_t run_therad_safe(int count_thread) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr); // дефолтные значения атрибутов
+
+    std::vector<pthread_t> threads(count_thread);
+
+    for (pthread_t &tid : threads) {
+        pthread_create(&tid, &attr, thread_trust, nullptr); // OK
+    }
+
+    for (pthread_t &tid : threads) {
+        pthread_join(tid, nullptr);
+    }
+
+    return trust_count;
+}
+
+TEST(PThread, TRUST) {
+
+    ASSERT_EQ(1'000'0000, run_therad_safe(1));
+    ASSERT_EQ(3'000'0000, run_therad_safe(2));
+    ASSERT_EQ(6'000'0000, run_therad_safe(3));
+}
+
+// THREADSAFE std::atomic<unsigned long long> a_count{0};
+// THREAD void *thread_func(void *arg) {
+//     TRUST_USING_EXTERNAL("*") // Разрешить доступ к любым внешним переменным
+//     a_count.fetch_add(1);     // OK
+//     pthread_exit(0);
+// }
+
+// unsigned long long run_therad_safe() {
+
+//     pthread_t tid;
+//     pthread_attr_t attr;
+//     // дефолтные значения атрибутов
+//     pthread_attr_init(&attr);
+
+//     // Ошибка компиляции pthread_create
+//     // Третий аргумент должен иметь атрубут 'thread'
+//     // pthread_create(&tid, &attr, thread_func_notrust, nullptr);
+
+//     pthread_create(&tid, &attr, thread_func, nullptr); // OK
+
+//     pthread_join(tid, nullptr);
+
+//     return a_count;
+// }

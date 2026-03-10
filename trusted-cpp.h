@@ -62,6 +62,10 @@
 #define TRUST_KEYWORD_USING_EXTERNAL "using-globals"
 #define TRUST_KEYWORD_PURE "pure"
 #define TRUST_KEYWORD_NOMINAL "nominal"
+#define TRUST_KEYWORD_THREAD "thread"
+#define TRUST_KEYWORD_THREADSAFE "threadsafe"
+
+#define TRUST_KEYWORD_SET_ATTR_ARGS "set-attr-args"
 
 #if defined __has_attribute
 #if __has_attribute( TRUST_KEYWORD_ATTRIBUTE )
@@ -103,6 +107,14 @@
 #define TRUST_NOMINAL  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL)
 #define TRUST_NOMINAL_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL, list)
 
+#define TRUST_THREAD  TRUSTED_ATTR(TRUST_KEYWORD_THREAD)
+// Нельзя использовать атрубут thread списком, так как для этого требуется анализ тела функции
+//#define TRUST_THREAD_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_THREAD, list)
+
+#define TRUST_THREADSAFE  TRUSTED_ATTR(TRUST_KEYWORD_THREAD_SAFE)
+#define TRUST_THREADSAFE_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_THREADSAFE, list)
+
+#define TRUST_SET_ATTR_ARGS(...) TRUSTED_ATTR(TRUST_KEYWORD_SET_ATTR_ARGS, __VA_ARGS__)
 
 /**
  * @def TRUSTED_ATTR(...)

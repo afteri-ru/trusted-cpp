@@ -21,6 +21,11 @@
 #include "clang/ASTMatchers/ASTMatchers.h"
 
 #include "clang/Lex/PreprocessorOptions.h"
+#include <cstddef>
+#include <cstdint>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #pragma clang attribute push
 #pragma clang diagnostic ignored "-Wdeprecated-anon-enum-enum-conversion"
@@ -189,7 +194,7 @@ struct DeclInfo {
 
 struct LifeTime {
     typedef std::variant<std::monostate, const FunctionDecl *, const CXXRecordDecl *, const CXXTemporaryObjectExpr *, const CallExpr *,
-                         const CXXMemberCallExpr *, const CXXOperatorCallExpr *, const MemberExpr *>
+                         const CXXMemberCallExpr *, const CXXOperatorCallExpr *, const MemberExpr *, const CXXConstructExpr *>
         ScopeType;
     /**
      * The scope and lifetime of variables (code block, function definition, function or method call, etc.)
@@ -229,6 +234,8 @@ struct LifeTime {
     // Pure function or class
     SourceLocation pureLoc;
 
+    std::set<std::string> m_safevars;
+    bool is_thread;
     bool top_level;
 
     // A patterns of global variable names for the current scope
@@ -236,7 +243,8 @@ struct LifeTime {
     StringMatcher globalsMatcher;
 
     LifeTime(SourceLocation start = SourceLocation(), SourceLocation stop = SourceLocation(), const ScopeType c = std::monostate(), bool top = true)
-        : startLoc(start), endLoc(stop), scope(c), unsafeLoc(SourceLocation()), pureLoc(SourceLocation()), top_level(top), globalsMatcher() {}
+        : startLoc(start), endLoc(stop), scope(c), unsafeLoc(SourceLocation()), pureLoc(SourceLocation()), m_safevars(), is_thread(false), top_level(top),
+          globalsMatcher() {}
 };
 
 class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of vector as it preserves iterators when resizing
@@ -263,6 +271,37 @@ class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of v
             iter++;
         }
         return SourceLocation();
+    }
+
+    bool testThread() {
+        auto iter = rbegin();
+        while (iter != rend()) {
+            if (iter->is_thread) {
+                return true;
+            }
+            iter++;
+        }
+        return false;
+    }
+
+    bool testThreadsafeVar(std::string_view varname, SourceLocation loc) {
+        bool is_local = true;
+        auto iter = rbegin();
+        while (iter != rend()) {
+            if (iter->top_level) {
+                is_local = false;   
+            }
+            if (is_local && iter->other.find(varname.begin()) != iter->other.end()) {
+                Verbose(loc, std::format("For local variables '{}' the 'threadsafe' attribute is not required.", varname));
+                return true;
+            }
+            if (iter->m_safevars.find(varname.begin()) != iter->m_safevars.end()) {
+                Verbose(loc, std::format("The 'threadsafe' attribute of the '{}' is present.", varname));
+                return true;
+            }
+            iter++;
+        }
+        return false;
     }
 
     const CXXRecordDecl *getParent() {
@@ -354,6 +393,8 @@ class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of v
 
         if (call) {
             return call->getDirectCallee()->getQualifiedNameAsString();
+        } else if (std::holds_alternative<const CXXConstructExpr *>(scope)) {
+            return std::get<const CXXConstructExpr *>(scope)->getConstructor()->getQualifiedNameAsString();
         }
 
         return "";
@@ -624,13 +665,18 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     static inline const char *USING_EXTERNAL = TRUST_KEYWORD_USING_EXTERNAL;
     static inline const char *NOMINAL_TYPE = TRUST_KEYWORD_NOMINAL;
 
+    static inline const char *THREAD = TRUST_KEYWORD_THREAD;
+    static inline const char *THREADSAFE = TRUST_KEYWORD_THREADSAFE;
+    static inline const char *SET_ATTR_ARGS = TRUST_KEYWORD_SET_ATTR_ARGS;
+
     static inline const char *STATUS_ENABLE = TRUST_KEYWORD_ENABLE;
     static inline const char *STATUS_DISABLE = TRUST_KEYWORD_DISABLE;
     static inline const char *STATUS_PUSH = TRUST_KEYWORD_PUSH;
     static inline const char *STATUS_POP = TRUST_KEYWORD_POP;
 
-    std::set<std::string> m_listFirstArg{PROFILE,     STATUS,    LEVEL,           PURE,         USING_EXTERNAL, NOMINAL_TYPE, UNSAFE,
-                                         SHARED_TYPE, AUTO_TYPE, INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE,     PRINT_AST,    PRINT_DUMP};
+    std::set<std::string> m_listFirstArg{PROFILE,     STATUS,     LEVEL,           PURE,         USING_EXTERNAL, NOMINAL_TYPE, UNSAFE,
+                                         SHARED_TYPE, AUTO_TYPE,  INVALIDATE_FUNC, WARNING_TYPE, ERROR_TYPE,     PRINT_AST,    PRINT_DUMP,
+                                         THREAD,      THREADSAFE, SET_ATTR_ARGS};
     std::set<std::string> m_listStatus{STATUS_ENABLE, STATUS_DISABLE, STATUS_PUSH, STATUS_POP};
     std::set<std::string> m_listLevel{ERROR, WARNING, NOTE, REMARK, IGNORED};
 
@@ -662,6 +708,23 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     std::set<std::string> m_error_type;
 
     std::set<std::string> m_nominal_types;
+    std::set<std::string> m_thread;
+    std::set<std::string> m_threadsafe;
+
+    /*
+     * Хранилище атрибутов в map, одна запись - одна функция, чтобы проще отслеживать переопределения
+     * Так как бывают функции с производльным количеством аргументов, то нужно предусмотреть возможнрость
+     * указания атрубутов для произвольной позции аргунмета (т.е. атрибут по умолчанию, кроме явно указанных)
+     * Атрибут по умолчанию пусть будут последним, как при указании объявления функции и его номер 0
+     * Для простоты проверки, при определнии номера аргументов должны идти по порядку (кроме атрубута по умолчанию, елси он есть)
+     * Для текущих целей можно ограничить аргумент не более, чем одним атрубутом.
+     */
+    // struct ArgAttr {
+    //     std::string name;
+    //     std::vector<int> pos;
+    // };
+    typedef std::map<uint8_t, std::string> AttrArgs;
+    std::map<std::string, AttrArgs> m_attr_args;
 
     std::vector<bool> m_status{false};
 
@@ -695,6 +758,12 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         m_level_non_const_method = clang::DiagnosticsEngine::Level::Error;
 
         m_is_cyclic_analysis = true;
+
+        m_attr_args = {
+            {"std::thread::thread", {{1, "thread"}, {0, "threadsafe"}}},
+            {"std::thread::jthread", {{1, "thread"}, {0, "threadsafe"}}},
+            {"pthread_create", {{3, "thread"}, {4, "threadsafe"}}},
+        };
     }
 
     inline clang::DiagnosticsEngine &getDiag() { return m_CI.getDiagnostics(); }
@@ -714,6 +783,44 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         Verbose(SourceLocation(), std::format("not-shared-classes: {}", makeHelperString(m_not_shared_class)), config);
         Verbose(SourceLocation(), std::format(TRUST_KEYWORD_INVALIDATE_FUNC ": {}", makeHelperString(m_invalidate_func)), config);
         Verbose(SourceLocation(), std::format("nominal-type: {}", makeHelperString(m_nominal_types)), config);
+        Verbose(SourceLocation(), std::format("thread: {}", makeHelperString(m_thread)), config);
+        Verbose(SourceLocation(), std::format("threadsafe: {}", makeHelperString(m_threadsafe)), config);
+
+        std::string list;
+        for (auto elem : m_attr_args) {
+            if (!list.empty()) {
+                list += ", ";
+            }
+
+            list += elem.first;
+            list += "(";
+
+            std::string has_default = "";
+            std::string args;
+            for (auto map_arg : elem.second) {
+                if (!args.empty()) {
+                    args += ",";
+                }
+
+                if (map_arg.first == 0) {
+                    has_default = map_arg.second;
+                } else {
+                    args += map_arg.second;
+                    args += "=";
+                    args += std::to_string(map_arg.first);
+                }
+            }
+            if (!has_default.empty()) {
+                if (!args.empty()) {
+                    args += ",";
+                }
+                args += has_default;
+                args += "=...";
+            }
+            list += args;
+            list += ")";
+        }
+        Verbose(SourceLocation(), std::format("attr-args: {}", list), config);
     }
 
     clang::DiagnosticsEngine::Level getLevel(clang::DiagnosticsEngine::Level original) {
@@ -803,7 +910,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             if (first.compare(PROFILE) == 0) {
                 clear();
             } else if (first.compare(UNSAFE) == 0 || first.compare(PRINT_AST) == 0 || first.compare(PURE) == 0 || first.compare(PRINT_DUMP) == 0 ||
-                       first.compare(NOMINAL_TYPE) == 0) {
+                       first.compare(NOMINAL_TYPE) == 0 || first.compare(THREAD) == 0 || first.compare(THREADSAFE) == 0) {
                 // The second argument may be empty
             } else {
                 result = "Two string literal arguments expected!";
@@ -862,6 +969,10 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                 m_invalidate_func.emplace(second.begin());
             } else if (first.compare(NOMINAL_TYPE) == 0) {
                 m_nominal_types.emplace(second.begin());
+            } else if (first.compare(THREAD) == 0) {
+                m_thread.emplace(second.begin());
+            } else if (first.compare(THREADSAFE) == 0) {
+                m_threadsafe.emplace(second.begin());
             }
         }
         return result;
@@ -1318,6 +1429,30 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                         Verbose(elem->getLocation(), std::format("Using globals '{}'", pair.second));
                     }
                     AttrComplete(elem->getLocation());
+
+                } else if (pair.first.compare(THREAD) == 0) {
+
+                    last.is_thread = true;
+                    if (cxx) {
+                        m_thread.emplace((*cxx)->getQualifiedNameAsString());
+                        Verbose(start, std::format("Add thread class '{}'", (*cxx)->getQualifiedNameAsString()));
+                    } else {
+                        m_thread.emplace(LifeTimeScope::getName(call));
+                        Verbose(elem->getLocation(), std::format("Add thread function '{}'", LifeTimeScope::getName(call)));
+                    }
+                    AttrComplete(elem->getLocation());
+
+                    // } else if (pair.first.compare(THREADSAFE) == 0) {
+
+                    //     last.m_
+                    //     if (cxx) {
+                    //         sssm_threadsafe.emplace((*cxx)->getQualifiedNameAsString());
+                    //         Verbose(start, std::format("Add threadsafe class '{}'", (*cxx)->getQualifiedNameAsString()));
+                    //     } else {
+                    //         m_threadsafe.emplace(LifeTimeScope::getName(call));
+                    //         Verbose(elem->getLocation(), std::format("Add threadsafe function '{}'", LifeTimeScope::getName(call)));
+                    //     }
+                    //     AttrComplete(elem->getLocation());
                 }
             }
         }
@@ -1630,6 +1765,17 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
             SourceLocation cur_location = ref->getLocation();
 
+            bool is_unsafe = m_scopes.testUnsafe().isValid();
+            if (m_scopes.testThread()) {
+                if (!m_scopes.testThreadsafeVar(ref_name, cur_location)) {
+                    if (is_unsafe) {
+                        LogWarning(cur_location, std::format("Unsafe expected attribute 'threadsafe' for '{}'", ref_name));
+                    } else {
+                        LogError(cur_location, std::format("Expected attribute 'threadsafe' for '{}'", ref_name));
+                    }
+                }
+            }
+
             clang::Expr::Classification cls = ref->ClassifyModifiable(m_CI.getASTContext(), cur_location);
             //                Expr::isModifiableLvalueResult mod = ref->isModifiableLvalue(m_CI.getSourceManager(), ref->getLocation());
             //                llvm::outs() << "isModifiable(): " << cls.getModifiable() << "\n";
@@ -1701,6 +1847,156 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
                                  std::format("Using the dependent variable '{}' after changing the main variable '{}'!", ref_name, block_found->first));
                     }
                 }
+            }
+        }
+        return true;
+    }
+
+    bool checkThreadsafeType(const CXXRecordDecl *type) {
+        bool result = type ? m_threadsafe.find(type->getQualifiedNameAsString()) != m_threadsafe.end() : false;
+        const CXXRecordDecl *cxx = dyn_cast_or_null<CXXRecordDecl>(type);
+        if (cxx) {
+            for (auto iter = cxx->bases_begin(); !result && iter != cxx->bases_end(); iter++) {
+                if (iter->isBaseOfClass()) {
+                    if (const CXXRecordDecl *base = iter->getType()->getAsCXXRecordDecl()) {
+                        result = checkClassNameTracking(base);
+                    }
+                }
+            }
+        }
+        return result;
+    }
+
+    const Expr *peelWrappers(const Expr *E) {
+        if (!E)
+            return nullptr;
+        E = E->IgnoreParenImpCasts(); // снимает Paren + ImplicitCast вокруг
+        // Иногда lambda/временные могут быть завернуты в cleanup-узлы
+        if (const auto *C = dyn_cast<ExprWithCleanups>(E))
+            E = C->getSubExpr();
+        // После снятия cleanup снова уберём скобки/простые implicit
+        E = E->IgnoreParenImpCasts();
+        return E;
+    }
+
+    bool CheckAttributeExist(const Expr *expr, std::string_view attr_name) {
+
+        const SourceManager &SM = m_CI.getSourceManager();
+        SourceLocation Loc = expr->getExprLoc();
+
+        const Expr *Sub = expr; // expr->getSubExpr();
+        Sub = peelWrappers(Sub);
+
+        // 1) <FunctionToPointerDecay> + DeclRefExpr -> FunctionDecl
+        // if (expr->getCastKind() == CK_FunctionToPointerDecay) {
+        if (const auto *DRE = dyn_cast_or_null<DeclRefExpr>(Sub)) {
+            if (const auto *FD = dyn_cast_or_null<FunctionDecl>(DRE->getDecl())) {
+                if (m_thread.find(FD->getQualifiedNameAsString()) != m_thread.end()) {
+                    Verbose(Loc, std::format("The '{}' attribute of the '{}' is present.", attr_name, FD->getQualifiedNameAsString()));
+                    return true;
+                }
+            }
+            // На всякий случай: может быть DeclRefExpr не на FunctionDecl
+            // llvm::outs() << "FunctionToPointerDecay at " << Loc.printToString(SM) << " declref (non-function)\n";
+            return false;
+        }
+
+        //     llvm::outs() << "FunctionToPointerDecay at " << Loc.printToString(SM) << " subexpr kind=" << (Sub ? Sub->getStmtClassName() : "null") << "\n";
+        //     return true;
+        // }
+
+        // 2) nullptr
+        if (isa_and_nonnull<CXXNullPtrLiteralExpr>(Sub)) {
+            Verbose(Loc, std::format("nullptr is '{}' always.", attr_name));
+            // llvm::outs() << "nullptr in ImplicitCastExpr at " << Loc.printToString(SM) << "\n";
+            return true;
+        }
+
+        // 3) lambda, возможно через MaterializeTemporaryExpr
+        const LambdaExpr *LE = nullptr;
+
+        if (const auto *MTE = dyn_cast_or_null<MaterializeTemporaryExpr>(Sub)) {
+            const Expr *Inner = peelWrappers(MTE->getSubExpr());
+            LE = dyn_cast_or_null<LambdaExpr>(Inner);
+        } else {
+            LE = dyn_cast_or_null<LambdaExpr>(Sub);
+        }
+
+        if (LE) {
+            // Можно вывести местоположение и тип замыкания (примерно)
+            QualType T = LE->getType();
+            PrintingPolicy PP(m_CI.getASTContext().getLangOpts());
+            PP.FullyQualifiedName = true;
+
+            // llvm::outs() << "lambda in ImplicitCastExpr at " << Loc.printToString(SM) << " type=" << T.getAsString(PP) << "\n";
+
+            m_scopes.back().is_thread = true;
+            Verbose(Loc, "Setting the 'thread' attribute for a lambda function");
+
+            return true;
+        }
+
+        // // Прочие случаи (для отладки/расширения)
+        // llvm::outs() << "Other ImplicitCastExpr at " << Loc.printToString(SM) << " castKind=" << expr->getCastKindName()
+        //              << " subexpr=" << (Sub ? Sub->getStmtClassName() : "null") << "\n";
+        return false;
+    }
+
+    void ChechAttrArgs(AttrArgs &attr, const Expr *const *args, const size_t count) {
+        if (!args) {
+            return;
+        }
+
+        bool is_unsafe = m_scopes.testUnsafe().isValid();
+
+        auto found = attr.find(0);
+        std::string_view has_default;
+        if (found != attr.end()) {
+            has_default = found->second;
+        }
+        for (unsigned i = 0; i < count; i++) {
+            found = attr.find(i + 1);
+            if (found != attr.end()) {
+                if (!CheckAttributeExist(args[i], found->second)) {
+                    if (is_unsafe) {
+                        LogWarning(args[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for {} argument", found->second, i + 1));
+                    } else {
+                        LogError(args[i]->getBeginLoc(), std::format("Expected attribute: '{}' for {} argument", found->second, i + 1));
+                    }
+                }
+            } else if (!has_default.empty()) {
+                if (!CheckAttributeExist(args[i], has_default)) {
+                    if (is_unsafe) {
+                        LogWarning(args[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for other arguments!", found->second));
+                    } else {
+                        LogError(args[i]->getBeginLoc(), std::format("Expected attribute: '{}' for other arguments!", found->second));
+                    }
+                }
+            }
+        }
+    }
+
+    bool VisitCXXConstructExpr(const CXXConstructExpr *call) {
+        if (isEnabled()) {
+
+            std::string calle_name = call->getConstructor()->getQualifiedNameAsString();
+
+            auto found = m_attr_args.find(calle_name);
+            if (found != m_attr_args.end()) {
+                ChechAttrArgs(found->second, call->getArgs(), call->getNumArgs());
+            }
+        }
+        return true;
+    }
+
+    bool VisitCallExpr(const CallExpr *call) {
+        if (isEnabled()) {
+
+            std::string calle_name = call->getDirectCallee()->getQualifiedNameAsString();
+
+            auto found = m_attr_args.find(calle_name);
+            if (found != m_attr_args.end()) {
+                ChechAttrArgs(found->second, call->getArgs(), call->getNumArgs());
             }
         }
         return true;
@@ -1969,6 +2265,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     TRAVERSE_CONTEXT(CXXMemberCallExpr);
     TRAVERSE_CONTEXT(CXXOperatorCallExpr);
     TRAVERSE_CONTEXT(CXXTemporaryObjectExpr);
+    TRAVERSE_CONTEXT(CXXConstructExpr);
 
     /*
      * Creating a plugin context for classes
@@ -2056,6 +2353,11 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
             // The name of the variable
             std::string var_name = var->getNameAsString();
+
+            if (checkThreadsafeType(class_decl)) {
+                m_scopes.back().m_safevars.emplace(var_name);
+                Verbose(var->getLocation(), std::format("Append attribute 'threadsafe' for '{}'", var_name));
+            }
 
             // The type (class) of the variable that the plugin should analyze
             const char *found_type = checkClassNameTracking(class_decl);
