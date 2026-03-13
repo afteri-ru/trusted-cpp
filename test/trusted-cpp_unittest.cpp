@@ -322,15 +322,15 @@ TEST(TrustedCPP, Threads) {
     }
 
     {
-        std::atomic<unsigned long long> a_count{0};
-        std::thread t3([&]() {
+        std::atomic<unsigned long long> a_count= 0;
+        std::thread t3([&](int value) {
             for (auto i = 0; i < 1'000'000; ++i)
-                a_count.fetch_add(1);
-        });
+                a_count++;
+        }, 100);
 
         std::thread t4([&]() {
             for (auto i = 0; i < 1'000'000; ++i)
-                a_count.fetch_add(1);
+                a_count++;
         });
 
         t3.join();

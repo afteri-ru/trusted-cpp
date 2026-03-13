@@ -202,6 +202,11 @@ struct LifeTime {
     const ScopeType scope;
     // const CXXRecordDecl *member;
 
+    bool isFunctionOrMethod() {
+        //
+        return std::holds_alternative<const FunctionDecl *>(scope) || std::holds_alternative<const CXXRecordDecl *>(scope);
+    }
+
     /**
      * Map of iterators and reference variables (iter => value)
      */
@@ -236,15 +241,13 @@ struct LifeTime {
 
     std::set<std::string> m_safevars;
     bool is_thread;
-    bool top_level;
 
     // A patterns of global variable names for the current scope
     // std::string USING_EXTERNAL;
     StringMatcher globalsMatcher;
 
-    LifeTime(SourceLocation start = SourceLocation(), SourceLocation stop = SourceLocation(), const ScopeType c = std::monostate(), bool top = true)
-        : startLoc(start), endLoc(stop), scope(c), unsafeLoc(SourceLocation()), pureLoc(SourceLocation()), m_safevars(), is_thread(false), top_level(top),
-          globalsMatcher() {}
+    LifeTime(SourceLocation start = SourceLocation(), SourceLocation stop = SourceLocation(), const ScopeType c = std::monostate())
+        : startLoc(start), endLoc(stop), scope(c), unsafeLoc(SourceLocation()), pureLoc(SourceLocation()), m_safevars(), is_thread(false), globalsMatcher() {}
 };
 
 class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of vector as it preserves iterators when resizing
@@ -288,10 +291,11 @@ class LifeTimeScope : protected std::deque<LifeTime> { // use deque instead of v
         bool is_local = true;
         auto iter = rbegin();
         while (iter != rend()) {
-            if (iter->top_level) {
-                is_local = false;   
+            if (iter->isFunctionOrMethod()) {
+                llvm::outs() << "isFunctionOrMethod " << getName(iter->scope) << "  !!!!!!!!!! \n";
+                is_local = false;
             }
-            if (is_local && iter->other.find(varname.begin()) != iter->other.end()) {
+            if (is_local && (iter->vars.find(varname.begin()) != iter->vars.end() || iter->other.find(varname.begin()) != iter->other.end())) {
                 Verbose(loc, std::format("For local variables '{}' the 'threadsafe' attribute is not required.", varname));
                 return true;
             }
@@ -1388,14 +1392,13 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
      */
     inline bool isEnabled() { return isEnabledStatus() && !scaner; }
 
-    void MakeScope(SourceLocation start, SourceLocation stop, LifeTime::ScopeType call, ArrayRef<const Attr *> attr = ArrayRef<const Attr *>(),
-                   bool top = true) {
+    void MakeScope(SourceLocation start, SourceLocation stop, LifeTime::ScopeType call, ArrayRef<const Attr *> attr = ArrayRef<const Attr *>()) {
 
         const CXXRecordDecl **cxx = std::get_if<const CXXRecordDecl *>(&call);
         Verbose(start, std::format("start {}: {}  {}", m_scopes.size(), LifeTimeScope::getName(call), cxx ? (*cxx)->getQualifiedNameAsString() : ""),
                 LifeTimeScope::TAG_liftime);
 
-        auto &last = m_scopes.emplace_back(LifeTime(start, stop, call, top));
+        auto &last = m_scopes.emplace_back(LifeTime(start, stop, call));
 
         for (auto &elem : attr) {
 
@@ -1757,6 +1760,29 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
      *
      */
 
+    static bool isElementaryOrTriviallyCopyableType(QualType QT) {
+        if (QT->isPointerType() || QT->isReferenceType()) {
+            return false;
+        }
+
+        // Снимаем "сахар" (cv-qualifiers/typedef/auto и т.п.)
+        QT = QT.getCanonicalType().getUnqualifiedType();
+
+        // 1) "Элементарный" (как минимум: builtin + enum; при желании можно расширять)
+        if (QT->isBuiltinType() || QT->isEnumeralType() || QT->isNullPtrType()) {
+            return true;
+        }
+
+        // 2) Тривиально копируемый класс/структура (передаётся по значению)
+        if (const CXXRecordDecl *RD = QT->getAsCXXRecordDecl()) {
+            // isTriviallyCopyable() — свойство типа (C++11+)
+            if (RD->isTriviallyCopyable()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     bool VisitDeclRefExpr(const DeclRefExpr *ref) {
         if (isEnabled() && !ref->getDecl()->isFunctionOrFunctionTemplate()) {
 
@@ -1767,6 +1793,9 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
             bool is_unsafe = m_scopes.testUnsafe().isValid();
             if (m_scopes.testThread()) {
+                // if (isElementaryOrTriviallyCopyableType(ref->getType())) {
+                //     Verbose(cur_location, "Elementary or trivially copyable value ??????????????????");
+                // } else
                 if (!m_scopes.testThreadsafeVar(ref_name, cur_location)) {
                     if (is_unsafe) {
                         LogWarning(cur_location, std::format("Unsafe expected attribute 'threadsafe' for '{}'", ref_name));
@@ -1868,12 +1897,14 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
     }
 
     const Expr *peelWrappers(const Expr *E) {
-        if (!E)
+        if (!E) {
             return nullptr;
+        }
         E = E->IgnoreParenImpCasts(); // снимает Paren + ImplicitCast вокруг
         // Иногда lambda/временные могут быть завернуты в cleanup-узлы
-        if (const auto *C = dyn_cast<ExprWithCleanups>(E))
+        if (const auto *C = dyn_cast<ExprWithCleanups>(E)) {
             E = C->getSubExpr();
+        }
         // После снятия cleanup снова уберём скобки/простые implicit
         E = E->IgnoreParenImpCasts();
         return E;
@@ -1905,6 +1936,11 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         //     return true;
         // }
 
+        if (isElementaryOrTriviallyCopyableType(Sub->getType())) {
+            Verbose(Loc, "Elementary or trivially copyable value !!!!!!!!!!!!!!!!!!!!!!");
+            return true;
+        }
+
         // 2) nullptr
         if (isa_and_nonnull<CXXNullPtrLiteralExpr>(Sub)) {
             Verbose(Loc, std::format("nullptr is '{}' always.", attr_name));
@@ -1935,15 +1971,11 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
             return true;
         }
-
-        // // Прочие случаи (для отладки/расширения)
-        // llvm::outs() << "Other ImplicitCastExpr at " << Loc.printToString(SM) << " castKind=" << expr->getCastKindName()
-        //              << " subexpr=" << (Sub ? Sub->getStmtClassName() : "null") << "\n";
         return false;
     }
 
-    void ChechAttrArgs(AttrArgs &attr, const Expr *const *args, const size_t count) {
-        if (!args) {
+    void ChechAttrArgs(AttrArgs &attr, const Expr *const *expr, const size_t count) {
+        if (!expr) {
             return;
         }
 
@@ -1955,21 +1987,25 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
             has_default = found->second;
         }
         for (unsigned i = 0; i < count; i++) {
+            if (isElementaryOrTriviallyCopyableType(expr[i]->getType())) {
+                Verbose(expr[i]->getBeginLoc(), "Elementary or trivially copyable value");
+                continue;
+            }
             found = attr.find(i + 1);
             if (found != attr.end()) {
-                if (!CheckAttributeExist(args[i], found->second)) {
+                if (!CheckAttributeExist(expr[i], found->second)) {
                     if (is_unsafe) {
-                        LogWarning(args[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for {} argument", found->second, i + 1));
+                        LogWarning(expr[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for {} argument", found->second, i + 1));
                     } else {
-                        LogError(args[i]->getBeginLoc(), std::format("Expected attribute: '{}' for {} argument", found->second, i + 1));
+                        LogError(expr[i]->getBeginLoc(), std::format("Expected attribute: '{}' for {} argument", found->second, i + 1));
                     }
                 }
             } else if (!has_default.empty()) {
-                if (!CheckAttributeExist(args[i], has_default)) {
+                if (!CheckAttributeExist(expr[i], has_default)) {
                     if (is_unsafe) {
-                        LogWarning(args[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for other arguments!", found->second));
+                        LogWarning(expr[i]->getBeginLoc(), std::format("Unsafe expected attribute: '{}' for other arguments!", has_default));
                     } else {
-                        LogError(args[i]->getBeginLoc(), std::format("Expected attribute: '{}' for other arguments!", found->second));
+                        LogError(expr[i]->getBeginLoc(), std::format("Expected attribute: '{}' for other arguments!", has_default));
                     }
                 }
             }
@@ -2248,6 +2284,17 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
      *
      */
 
+    // bool TraverseMemberExpr(MemberExpr *arg) {
+    //     if (isEnabledStatus()) {
+    //         const AttributedStmt *attr = dyn_cast_or_null<AttributedStmt>(arg);
+    //         MakeScope(arg->getBeginLoc(), arg->getEndLoc(), arg, attr ? attr->getAttrs() : ArrayRef<const Attr *>(), false);
+    //         RecursiveASTVisitor<TrustPlugin>::TraverseMemberExpr(arg);
+    //         m_scopes.PopScope();
+    //     }
+    //     return true;
+    // }
+
+    // SET LOCAL TOP
 #define TRAVERSE_CONTEXT(name)                                                                                                                                 \
     bool Traverse##name(name *arg) {                                                                                                                           \
         if (isEnabledStatus()) {                                                                                                                               \
@@ -2366,6 +2413,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
                 // The type (class) of the variable does not require analysis
                 m_scopes.back().other.emplace(var_name);
+                llvm::outs() << "other.emplace(var_name): " << var_name << "\n";
 
                 if (var->getType()->isPointerType()) {
                     if (is_unsafe) {
@@ -2467,6 +2515,15 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
         return RecursiveASTVisitor<TrustPlugin>::TraverseParmVarDecl(param);
     }
 
+    // bool TraverseCompoundStmt(CompoundStmt *stmt) {
+
+    //     const AttributedStmt *attrStmt = dyn_cast_or_null<AttributedStmt>(stmt);
+    //     MakeScope(stmt->getBeginLoc(), stmt->getEndLoc(), std::monostate(), attrStmt ? attrStmt->getAttrs() : ArrayRef<const Attr *>());
+    //     RecursiveASTVisitor<TrustPlugin>::TraverseCompoundStmt(stmt);
+    //     m_scopes.PopScope();
+
+    //     return true;
+    // }
     /*
      * Traversing statements in AST
      */
@@ -2489,7 +2546,7 @@ class TrustPlugin : public RecursiveASTVisitor<TrustPlugin> {
 
                 // m_scopes.PushScope(stmt->getEndLoc(), std::monostate(), checkUnsafeBlock(attrStmt));
 
-                MakeScope(stmt->getBeginLoc(), stmt->getEndLoc(), std::monostate(), attrStmt ? attrStmt->getAttrs() : ArrayRef<const Attr *>(), false);
+                MakeScope(stmt->getBeginLoc(), stmt->getEndLoc(), std::monostate(), attrStmt ? attrStmt->getAttrs() : ArrayRef<const Attr *>());
 
                 RecursiveASTVisitor<TrustPlugin>::TraverseStmt(stmt);
 
@@ -2584,7 +2641,7 @@ bool LifeTimeScope::checkExternalName(const std::string &name, const std::string
         //     return true;
         // }
 
-        if (iter->top_level) {
+        if (iter->isFunctionOrMethod()) {
 
             // if(iter->member){
             //     llvm::errs() << "Methond: " << name << " MEMBER for " << iter->member->getQualifiedNameAsString() << "!!!!!!!!!!!!!!!!!\n";

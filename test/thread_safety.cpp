@@ -20,6 +20,7 @@
 #include "pthread.h"
 
 #include "trusted-cpp.h"
+#include <unistd.h>
 
 uint64_t notrust_count = 0;
 void *thread_notrust(void *arg) { // Без установки атрибута  THREAD
@@ -63,6 +64,26 @@ TRUST_THREAD void *thread_trust(void *arg) {
     return nullptr;
 }
 
+class TrivialClass {
+  public:
+    int x;
+    int y;
+    TrivialClass(const TrivialClass &other) = default;
+    TrivialClass(int xx, int yy) : x(xx), y(yy) {}
+};
+static_assert(std::is_trivially_copyable<TrivialClass>::value);
+
+
+// LinkageSpecDecl 0x7b28ff7d3620 </home/rsashka/SOURCE/afteri/trusted-cpp/test/thread_safety.cpp:77:1, col:21> col:8 C
+// `-VarDecl 0x7b28ff7d 3688 <col:12, col:21> col:21 used ref_counter 'uint64_t':'unsigned long'
+//TRUSTED_PRINT_AST("*");
+extern "C" uint64_t ref_counter;
+TRUST_THREAD TrivialClass thread_trivial(int value, TrivialClass cls, uint64_t *ref) {
+    cls.x += ref_counter;
+    cls.y += value;
+    return cls;
+}
+
 void stub() {
     pthread_attr_t attr;
     pthread_attr_init(&attr); // дефолтные значения атрибутов
@@ -77,6 +98,11 @@ void stub() {
     pthread_create(&tid, &attr, thread_trust, nullptr);
     // THREAD: verbose: The 'thread' attribute of the 'thread_trust' is present.
     // THREAD-NEXT: verbose: nullptr is 'threadsafe' always.
+
+    {
+        std::thread trivial(thread_trivial, 100, TrivialClass(10, 20), &notrust_count);
+        trivial.join();
+    }
 
     {
         unsigned long long g_count = 0;
