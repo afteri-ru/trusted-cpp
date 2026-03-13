@@ -9,7 +9,7 @@ config.test_format = lit.formats.ShTest(not lit_config.useValgrind)
 
 # Настройки тестов
 config.suffixes = ['.c', '.cpp']
-config.excludes = ['trusted-cpp_test.cpp']
+config.excludes = ['trusted-cpp_unittest.cpp', '_cycles.cpp', 'thread_safety.cpp']
 
 # Пути к инструментам
 config.llvm_tools_dir = "/usr/lib/llvm-21/bin"

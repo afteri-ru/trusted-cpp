@@ -37,8 +37,14 @@ img {
 }
 
 /* Headings */
-h1, h2, h3, h4, h5, h6 {
+h2, h3, h4, h5, h6 {
   font-weight: 400;
+  margin-bottom: 2emx;
+  font-weight: bold;
+  background-color: #f2f2f2;
+  border-bottom: 1px solid #ccc;
+  margin: 20px -20px 10px -20px;
+  padding: 3px 0 3px 10px;  
 }
 
 /* Links */
@@ -110,7 +116,7 @@ pre > code {
 
 /* Header */
 header {
-  background-color: #2980b9;
+  background-image: linear-gradient( #2980b9, #80c0eb);
   color: white;
   padding: 30px 0;
   margin-bottom: 30px;
@@ -185,4 +191,14 @@ th {
   border-left: 4px solid #2980b9;
   padding: 15px;
   margin-bottom: 20px;
+}
+
+
+ul > li > ul {
+  margin-left: 2em;
+}
+
+.language {
+   text-align: right; 
+   margin-left: 50px;
 }

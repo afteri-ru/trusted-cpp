@@ -1,4 +1,8 @@
-#ifdef BUILD_UNITTEST
+#include <cstdio>
+#include <vector>
+#ifndef BUILD_UNITTEST
+#error "Build for unt test only"
+#endif
 
 #include <gtest/gtest.h>
 
@@ -7,6 +11,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+
+#include "pthread.h"
 
 #include "trusted-cpp_plugin.h"
 
@@ -289,10 +295,16 @@ TEST(TrustedCPP, Class) {
     ASSERT_FALSE(cls.field_2.m_field.get());
 };
 
+unsigned long long g_count = 0;
+void * no_safe_thread() {
+    for (auto i = 0; i < 1'000'0000; ++i) {
+        ++g_count;
+    }
+    return nullptr;
+}
 TEST(TrustedCPP, Threads) {
 
     {
-        unsigned long long g_count = 0;
         std::thread t1([&]() {
             for (auto i = 0; i < 1'000'0000; ++i)
                 ++g_count;
@@ -301,22 +313,24 @@ TEST(TrustedCPP, Threads) {
             for (auto i = 0; i < 1'000'0000; ++i)
                 ++g_count;
         });
+        std::thread t3(&no_safe_thread);
         t1.join();
         t2.join();
+        t3.join();
 
-        EXPECT_NE(2'000'000, g_count);
+        EXPECT_NE(3'000'000, g_count);
     }
 
     {
-        std::atomic<unsigned long long> a_count{0};
-        std::thread t3([&]() {
+        std::atomic<unsigned long long> a_count= 0;
+        std::thread t3([&](int value) {
             for (auto i = 0; i < 1'000'000; ++i)
-                a_count.fetch_add(1);
-        });
+                a_count++;
+        }, 100);
 
         std::thread t4([&]() {
             for (auto i = 0; i < 1'000'000; ++i)
-                a_count.fetch_add(1);
+                a_count++;
         });
 
         t3.join();
@@ -635,381 +649,161 @@ TEST(TrustedCPP, WeakList) {
     ASSERT_FALSE(int_list.empty());
 }
 
-// TEST(TrustedCPP, Plugin) {
+TEST(StringMatcher, Patterns) {
 
-//     // Example of running a plugin to compile a file
+    StringMatcher empty;
+    EXPECT_TRUE(empty.isEmpty());
 
-//     /* The plugin operation is checked as follows.
-//      * A specific file with examples of template usage from the metsafe/ file is compiled
-//      * The example file contains correct C++ code,
-//      * but the variables in it are used both correctly and with violations of the rules.
-//      *
-//      * When compiling a file with an analyzer plugin, the debug output is written to a file.
-//      * This file is read in the test and debug messages of the plugin
-//      * are searched for in it (both successful and unsuccessful checks).
-//      *
-//      * If all check messages are found, the test is considered successful.
-//      */
+    StringMatcher match_0("");
 
-//     std::string cmd = "clang-21";
-//     cmd += " -std=c++20 -ferror-limit=500 ";
-//     cmd += " -Xclang -load -Xclang ../trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust ";
-//     cmd += " -Xclang -plugin-arg-trust -Xclang log ";
-//     cmd += " -Xclang -plugin-arg-trust -Xclang circleref-disable";
-//     cmd += " -c _example.cpp > _example.cpp.log";
+    EXPECT_FALSE(match_0.isEmpty());
+    EXPECT_TRUE(match_0.MatchesName(""));
+    EXPECT_FALSE(match_0.MatchesName("_"));
+    EXPECT_FALSE(match_0.MatchesName("name"));
+    EXPECT_FALSE(match_0.MatchesName("name::"));
+    EXPECT_FALSE(match_0.MatchesName("::name"));
+    EXPECT_FALSE(match_0.MatchesName("ns::name"));
 
-//     const char * file_log = "_example.cpp.log";
-//     fs::remove(file_log);
+    StringMatcher match_1("*");
 
-//     int err = std::system(cmd.c_str());
+    EXPECT_FALSE(match_1.isEmpty());
+    EXPECT_TRUE(match_1.MatchesName(""));
+    EXPECT_TRUE(match_1.MatchesName("_"));
+    EXPECT_TRUE(match_1.MatchesName("name"));
+    EXPECT_TRUE(match_1.MatchesName("name::"));
+    EXPECT_TRUE(match_1.MatchesName("::name"));
+    EXPECT_TRUE(match_1.MatchesName("ns::name"));
 
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file(file_log);
+    StringMatcher match_none("_");
 
-//     ASSERT_TRUE(log_file.is_open());
+    EXPECT_FALSE(match_none.isEmpty());
+    EXPECT_FALSE(match_none.MatchesName(""));
+    EXPECT_TRUE(match_none.MatchesName("_"));
+    EXPECT_FALSE(match_none.MatchesName("name"));
+    EXPECT_FALSE(match_none.MatchesName("name::"));
+    EXPECT_FALSE(match_none.MatchesName("::name"));
+    EXPECT_FALSE(match_none.MatchesName("ns::name"));
 
-//     std::stringstream log_buffer;
-//     log_buffer << log_file.rdbuf();
+    StringMatcher match_ns("*global_*");
 
-//     std::string log_output = log_buffer.str();
-//     log_file.close();
+    EXPECT_FALSE(match_ns.isEmpty());
+    EXPECT_FALSE(match_ns.MatchesName(""));
+    EXPECT_FALSE(match_ns.MatchesName("global"));
+    EXPECT_TRUE(match_ns.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_ns.MatchesName("ns::ns2::global_2"));
 
-//     ASSERT_TRUE(!log_output.empty());
+    StringMatcher match_ns2("ns*");
 
-//     ASSERT_TRUE(log_output.find("Enable dump and process logger") != std::string::npos &&
-//             log_output.find("unprocessed attribute!") == std::string::npos)
-//             << log_output;
+    EXPECT_FALSE(match_ns2.isEmpty());
+    EXPECT_FALSE(match_ns2.MatchesName(""));
+    EXPECT_FALSE(match_ns2.MatchesName("global"));
+    EXPECT_TRUE(match_ns2.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_ns2.MatchesName("ns::ns2::global_2"));
 
-//     std::vector<std::string> diag({
-//         "#log #201",
-//         "#log #201",
-//         "#log #202",
-//         "#log #202",
-//         "#log #202",
-//         "#err #204",
-//         "#err #204",
-//         "#log #207",
-//         "#log #207",
-//         "#log #208",
-//         "#err #209",
-//         "#log #209",
-//         "#warn #208",
-//         "#err #209",
-//         "#log #301",
-//         "#log #302",
-//         "#warn #301",
-//         "#warn #302",
-//         "#err #303",
-//         "#log #303",
-//         "#log #401",
-//         "#log #402",
-//         "#log #901",
-//         "#log #903",
-//         "#log #1001",
-//         "#log #1002",
-//         "#log #1003",
-//         "#log #2003",
-//         "#log #2004",
-//         "#err #3002",
-//         "#log #3002",
-//         "#err #3003",
-//         "#log #3003",
-//         "#log #3003",
-//         "#log #4101",
-//         "#log #4103",
-//         "#log #4105",
-//         "#log #4201",
-//         "#log #4202",
-//         "#log #4302",
-//         "#log #4401",
-//         "#log #4501",
-//         "#log #4513",
-//         "#log #4603",
-//         "#err #7003",
-//         "#log #7003",
-//         "#log #7004",
-//         "#log #7005",
-//         "#log #7009",
+    StringMatcher match_name("ns::global_1;*global_2");
 
-//         //bugfix_11()
-//         "#log #900011002",
-//         "#log #900011002",
-//         "#log #900011003",
-//         "#warn #900011003",
-//         "#err #900011004",
-//         "#log #900011004",
+    EXPECT_FALSE(match_name.isEmpty());
+    EXPECT_FALSE(match_name.MatchesName(""));
+    EXPECT_FALSE(match_name.MatchesName("global"));
+    EXPECT_TRUE(match_name.MatchesName("ns::global_1"));
+    EXPECT_TRUE(match_name.MatchesName("ns::ns2::global_2"));
 
-//         //bugfix_12()
-//         "#log #900012002",
-//         "#log #900012003",
-//         "#warn #900012003",
-//         "#err #900012004",
-//     });
+    StringMatcher match_space("ns::global_1; *global_2");
 
-//     size_t pos = log_output.find(TRUST_KEYWORD_START_LOG);
-//     ASSERT_TRUE(pos != std::string::npos);
-//     std::string log_str = log_output.substr(pos + strlen(TRUST_KEYWORD_START_LOG), log_output.find("\n\n", pos + strlen(TRUST_KEYWORD_START_LOG)) - pos -
-//     strlen(TRUST_KEYWORD_START_LOG));
+    EXPECT_FALSE(match_space.isEmpty());
+    EXPECT_FALSE(match_space.MatchesName(""));
+    EXPECT_FALSE(match_space.MatchesName("global"));
+    EXPECT_TRUE(match_space.MatchesName("ns::global_1"));
+    // EXPECT_TRUE(match_space.MatchesName("ns::ns2::global_2"));
+}
 
-//     //    std::cout << "\n" << log_str << "\n\n";
+uint64_t notrust_count = 0;
+[[clang::optnone]] void *thread_notrust(void *arg) { // Без установки атрибута  THREAD
 
-//     std::vector< std::string> log;
-//     SplitString(log_str, '\n', &log);
+    for (int64_t i = 0; i < 1'000'0000; i++) {
+        ++notrust_count; // Гонка
+    }
+    return nullptr;
+}
 
-//     ASSERT_TRUE(log.size()) << log_str;
+int64_t run_therad_not_safe(int count_thread) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr); // дефолтные значения атрибутов
 
-//     while (!log.empty() && !diag.empty()) {
+    std::vector<pthread_t> threads(count_thread);
 
-//         if (log.front().find(diag.front()) != std::string::npos) {
-//             log.erase(log.begin());
-//             diag.erase(diag.begin());
-//         } else {
+    for (pthread_t &tid : threads) {
+        pthread_create(&tid, &attr, thread_notrust, nullptr); // OK
+    }
 
-//             ASSERT_TRUE(diag.front().find(" #") != std::string::npos) << diag.front();
+    for (pthread_t &tid : threads) {
+        pthread_join(tid, nullptr);
+    }
 
-//             size_t diag_line = atoi(diag.front().data() + diag.front().find(" #") + 2);
-//             ASSERT_TRUE(diag_line) << diag.front();
+    return notrust_count;
+}
 
-//             size_t skip = log.front().find(" #");
-//             ASSERT_TRUE(skip != std::string::npos) << log.front();
+TEST(PThread, NOTRUST) {
 
-//             ASSERT_TRUE(log.front().find(" #", skip + 2) != std::string::npos) << log.front();
+    ASSERT_EQ(1'000'0000, run_therad_not_safe(1));
+    ASSERT_NE(3'000'0000, run_therad_not_safe(2));
+    ASSERT_NE(6'000'0000, run_therad_not_safe(3));
+}
 
-//             size_t log_line = atoi(log.front().data() + log.front().find(" #", skip + 2) + 2);
-//             ASSERT_TRUE(log_line) << log.front();
+std::atomic<uint64_t> trust_count = 0;
+[[clang::optnone]] void *thread_trust(void *arg) { // Без установки атрибута  THREAD
 
-//             if (log_line > diag_line) {
-//                 ADD_FAILURE() << "In log not found: " << log.front();
-//                 log.erase(log.begin());
-//             } else if (log_line < diag_line) {
-//                 ADD_FAILURE() << "In diag not found: " << diag.front();
-//                 diag.erase(diag.begin());
-//             } else {
-//                 ADD_FAILURE() << "Diag expected: \"" << diag.front() << "\" but found \"" << log.front() << "\"";
-//                 log.erase(log.begin());
-//                 diag.erase(diag.begin());
-//             }
-//         }
-//     }
+    for (int64_t i = 0; i < 1'000'0000; i++) {
+        trust_count++;
+    }
+    return nullptr;
+}
 
-//     for (auto &elem : log) {
-//         ADD_FAILURE() << "Log not found: " << elem;
-//     }
-//     for (auto &elem : diag) {
-//         ADD_FAILURE() << "Diag not found: " << elem;
-//     }
+int64_t run_therad_safe(int count_thread) {
+    pthread_attr_t attr;
+    pthread_attr_init(&attr); // дефолтные значения атрибутов
 
+    std::vector<pthread_t> threads(count_thread);
+
+    for (pthread_t &tid : threads) {
+        pthread_create(&tid, &attr, thread_trust, nullptr); // OK
+    }
+
+    for (pthread_t &tid : threads) {
+        pthread_join(tid, nullptr);
+    }
+
+    return trust_count;
+}
+
+TEST(PThread, TRUST) {
+
+    ASSERT_EQ(1'000'0000, run_therad_safe(1));
+    ASSERT_EQ(3'000'0000, run_therad_safe(2));
+    ASSERT_EQ(6'000'0000, run_therad_safe(3));
+}
+
+// THREADSAFE std::atomic<unsigned long long> a_count{0};
+// THREAD void *thread_func(void *arg) {
+//     TRUST_USING_EXTERNAL("*") // Разрешить доступ к любым внешним переменным
+//     a_count.fetch_add(1);     // OK
+//     pthread_exit(0);
 // }
 
-// TEST(TrustedCPP, Cycles) {
+// unsigned long long run_therad_safe() {
 
-//     const std::string cmd_base = "clang-21 -std=c++20 -ferror-limit=500 -Xclang -load -Xclang ../trusted-cpp_clang.so -Xclang -add-plugin -Xclang trust
-//     -Xclang -plugin-arg-trust -Xclang log ";
+//     pthread_t tid;
+//     pthread_attr_t attr;
+//     // дефолтные значения атрибутов
+//     pthread_attr_init(&attr);
 
-//     fs::remove(TrustFile::SHARED_SCAN_FILE_DEFAULT);
+//     // Ошибка компиляции pthread_create
+//     // Третий аргумент должен иметь атрубут 'thread'
+//     // pthread_create(&tid, &attr, thread_func_notrust, nullptr);
 
-//     const char * file_log = "_cycles.cpp.log";
-//     fs::remove(file_log);
+//     pthread_create(&tid, &attr, thread_func, nullptr); // OK
 
-//     std::system(std::format("{} -c _cycles.cpp > _cycles.cpp.log", cmd_base).c_str());
+//     pthread_join(tid, nullptr);
 
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file(file_log);
-
-//     ASSERT_TRUE(log_file.is_open());
-
-//     std::stringstream log_buffer;
-//     log_buffer << log_file.rdbuf();
-
-//     std::string log_output = log_buffer.str();
-//     log_file.close();
-
-//     ASSERT_TRUE(log_output.find("not found in current translation unit.") != std::string::npos);
-
-//     ASSERT_FALSE(fs::exists(TrustFile::SHARED_SCAN_FILE_DEFAULT));
-//     fs::remove("_example.cpp.log");
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write -fsyntax-only _example.cpp > _example.cpp.log", cmd_base).c_str());
-
-//     ASSERT_TRUE(fs::exists("_example.cpp.log"));
-//     ASSERT_TRUE(fs::exists(TrustFile::SHARED_SCAN_FILE_DEFAULT));
-
-//     std::ifstream example_file("_example.cpp.log");
-//     ASSERT_TRUE(example_file.is_open());
-
-//     std::stringstream example_file_buffer;
-//     example_file_buffer << example_file.rdbuf();
-
-//     std::string example_log = example_file_buffer.str();
-//     example_file.close();
-
-//     ASSERT_TRUE(example_log.size() > 100);
-//     ASSERT_TRUE(example_log.find("The circular reference analyzer requires two passes.") == std::string::npos);
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-read -c _cycles.cpp > _cycles.cpp.log", cmd_base).c_str());
-
-//     ASSERT_TRUE(fs::exists(file_log));
-//     std::ifstream log_file2(file_log);
-
-//     ASSERT_TRUE(log_file2.is_open());
-
-//     std::stringstream log_buffer2;
-//     log_buffer2 << log_file2.rdbuf();
-
-//     std::string log_output2 = log_buffer2.str();
-//     log_file2.close();
-
-//     ASSERT_TRUE(log_output2.size() > 100);
-//     ASSERT_TRUE(log_output2.find("The circular reference analyzer requires two passes.") == std::string::npos);
-
-//     ASSERT_TRUE(!log_output2.empty());
-
-//     ASSERT_TRUE(log_output2.find("Enable dump and process logger") != std::string::npos &&
-//             log_output2.find("unprocessed attribute!") == std::string::npos)
-//             << log_output2;
-
-//     std::vector<std::string> diag({
-//         "#log #102",
-//         "#log #103",
-//         "#log #102",
-//         "#log #1003",
-//         "#log #1002",
-//         "#err #1003",
-//         "#err #1003",
-//         "#log #1006",
-//         "#err #1007",
-//         "#log #1011",
-//         "#log #1010",
-//         "#log #1003",
-//         "#err #1003",
-//         "#warn #1011",
-//         "#log #1014",
-//         "#err #1007",
-//         "#log #2009",
-//         "#log #2002",
-//         "#log #2005",
-//         "#err #2005",
-//         "#log #2005",
-//         "#log #2004",
-//         "#log #2009",
-//         "#err #2009",
-//         "#err #2005",
-//         "#log #2009",
-//         "#log #2008",
-//         "#log #2005",
-//         "#err #2005",
-//         "#err #2009",
-//         "#log #2013",
-//         "#log #2012",
-//         "#log #2009",
-//         "#log #2012",
-//         "#warn #2013",
-//         "#log #2017",
-//         "#log #2016",
-//         "#log #2005",
-//         "#log #2016",
-//         "#warn #2017",
-//         "#log #3002",
-//         "#log #3002",
-//         "#log #3005",
-//         "#log #3005",
-//         "#log #4002",
-//         "#log #4002",
-//         "#log #4005",
-//         "#log #4005",
-//         "#log #5003",
-//         "#log #5003",
-//         "#log #5006",
-//         "#log #5006",
-//         "#log #5009",
-//         "#log #5009",
-//         "#log #10002",
-//         "#log #10007",
-//     });
-
-//     size_t pos = log_output2.find(TRUST_KEYWORD_START_LOG);
-//     ASSERT_TRUE(pos != std::string::npos);
-//     std::string log_str = log_output2.substr(pos + strlen(TRUST_KEYWORD_START_LOG), log_output2.find("\n\n", pos + strlen(TRUST_KEYWORD_START_LOG)) - pos -
-//     strlen(TRUST_KEYWORD_START_LOG));
-
-//     //    std::cout << "\n" << log_str << "\n\n";
-
-//     std::vector< std::string> log;
-//     SplitString(log_str, '\n', &log);
-
-//     ASSERT_TRUE(log.size()) << log_str;
-
-//     while (!log.empty() && !diag.empty()) {
-
-//         if (log.front().find(diag.front()) != std::string::npos) {
-//             log.erase(log.begin());
-//             diag.erase(diag.begin());
-//         } else {
-
-//             ASSERT_TRUE(diag.front().find(" #") != std::string::npos) << diag.front();
-
-//             size_t diag_line = atoi(diag.front().data() + diag.front().find(" #") + 2);
-//             ASSERT_TRUE(diag_line) << diag.front();
-
-//             size_t skip = log.front().find(" #");
-//             ASSERT_TRUE(skip != std::string::npos) << log.front();
-
-//             ASSERT_TRUE(log.front().find(" #", skip + 2) != std::string::npos) << log.front();
-
-//             size_t log_line = atoi(log.front().data() + log.front().find(" #", skip + 2) + 2);
-//             ASSERT_TRUE(log_line) << log.front();
-
-//             if (log_line > diag_line) {
-//                 ADD_FAILURE() << "In log not found: " << log.front();
-//                 log.erase(log.begin());
-//             } else if (log_line < diag_line) {
-//                 ADD_FAILURE() << "In diag not found: " << diag.front();
-//                 diag.erase(diag.begin());
-//             } else {
-//                 ADD_FAILURE() << "Diag expected: \"" << diag.front() << "\" but found \"" << log.front() << "\"";
-//                 log.erase(log.begin());
-//                 diag.erase(diag.begin());
-//             }
-//         }
-//     }
-
-//     for (auto &elem : log) {
-//         ADD_FAILURE() << "Log not found: " << elem;
-//     }
-//     for (auto &elem : diag) {
-//         ADD_FAILURE() << "Diag not found: " << elem;
-//     }
-
-//     std::string temp_trust = "unittest-all.trust";
-
-//     fs::remove(temp_trust);
-//     ASSERT_TRUE(!fs::exists(temp_trust));
-
-//     std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write={} -fsyntax-only _example.cpp > _example.second.log", cmd_base,
-//     temp_trust).c_str()); std::system(std::format("{} -Xclang -plugin-arg-trust -Xclang circleref-write={} -fsyntax-only _cycles.cpp > _cycles.second.log",
-//     cmd_base, temp_trust).c_str());
-
-//     ASSERT_TRUE(fs::exists(temp_trust));
-
-//     TrustFile file(temp_trust, "unit_test.not_file");
-
-//     TrustFile::ClassReadType readed;
-
-//     ASSERT_NO_THROW(file.ReadFile(readed));
-
-//     std::string shared = TrustFile::to_string(readed);
-
-//     ASSERT_STREQ("cycles::ArraySharedInt {std::vector} fields:{}\ncycles::CircleSelf {} fields:{cycles::CircleSelf}\ncycles::CircleSelfUnsafe {}
-//     fields:{cycles::CircleSelf}\ncycles::CircleShared {} fields:{cycles::CircleShared}\ncycles::CircleSharedUnsafe {}
-//     fields:{cycles::CircleShared}\ncycles::ExtExt {ns::Ext} fields:{}\ncycles::ExtExtExt {cycles::ExtExt} fields:{}\ncycles::SharedArrayInt {std::vector}
-//     fields:{}\ncycles::SharedCross {} fields:{cycles::SharedCross2}\ncycles::SharedCross2 {} fields:{cycles::SharedCross}\ncycles::SharedCross2Unsafe {}
-//     fields:{cycles::SharedCross}\ncycles::SharedCrossUnsafe {} fields:{cycles::SharedCross2}\ncycles::SharedSingle {} fields:{}\ncycles::SharedSingleInt {}
-//     fields:{}\ncycles::SharedSingleIntField {} fields:{cycles::SharedSingleInt}\nns::A {} fields:{ns::Ext}\nns::Ext {} fields:{ns::A}\n", shared.c_str()) <<
-//     shared;
-
-//     fs::remove("_example.second.log");
-//     fs::remove("_cycles.second.log");
-//     fs::remove(temp_trust);
+//     return a_count;
 // }
-
-#endif

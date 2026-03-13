@@ -6,18 +6,27 @@
 title: Trusted-CPP Documentation
 email: 
 description: >-
-  Safe software development for C++ at the source code level.
-  Безопасная разработка программ на C++ на уровне исходного кода.
+  Safe software development for C++
+  Безопасная разработка программ на C++
 baseurl: ""
 url: "https://trusted-cpp.org"
 
 # Build settings
 markdown: kramdown
-theme: minima
+highlighter: rouge
+kramdown:
+  # use Github Flavored Markdown
+  input: GFM
+  # do not replace newlines by <br>s
+  hard_wrap: false
+
+remote_theme: pages-themes/cayman@v0.2.0
 plugins:
+  - jekyll-remote-theme # add this line to the plugins list if you already have one
   - jekyll-feed
   - jekyll-sitemap
   - jekyll-seo-tag
+  - jekyll-highlight
 
 # Collections for multilingual documentation
 collections:
