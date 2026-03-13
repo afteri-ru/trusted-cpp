@@ -39,9 +39,7 @@
 #define TRUST_KEYWORD_UNSAFE "unsafe"
 #define TRUST_KEYWORD_PRINT_AST "print-ast"
 #define TRUST_KEYWORD_PRINT_DUMP "print-dump"
-#define TRUST_KEYWORD_BASELINE "baseline"
 
-#define TRUST_KEYWORD_START_LOG "#trust-log\n"
 #define TRUST_KEYWORD_START_DUMP "#trust-dump\n"
 
 #define TRUST_KEYWORD_ENABLE "enable"
@@ -61,6 +59,13 @@
 #define TRUST_KEYWORD_SHARED_TYPE "shared-type"
 #define TRUST_KEYWORD_INVALIDATE_FUNC  "invalidate-func"
 
+#define TRUST_KEYWORD_USING_EXTERNAL "using-globals"
+#define TRUST_KEYWORD_PURE "pure"
+#define TRUST_KEYWORD_NOMINAL "nominal"
+#define TRUST_KEYWORD_THREAD "thread"
+#define TRUST_KEYWORD_THREADSAFE "threadsafe"
+
+#define TRUST_KEYWORD_SET_ATTR_ARGS "set-attr-args"
 
 #if defined __has_attribute
 #if __has_attribute( TRUST_KEYWORD_ATTRIBUTE )
@@ -96,6 +101,21 @@
 #define TRUSTED_PRINT_AST(filter) TRUSTED_ATTR(TRUST_KEYWORD_PRINT_AST, filter) void trust_stub();
 #define TRUSTED_PRINT_DUMP(filter) TRUSTED_ATTR(TRUST_KEYWORD_PRINT_DUMP, filter) void trust_stub();
 
+#define TRUST_USING_EXTERNAL(list) TRUSTED_ATTR(TRUST_KEYWORD_USING_EXTERNAL, list)
+#define TRUST_PURE TRUSTED_ATTR(TRUST_KEYWORD_PURE)
+
+#define TRUST_NOMINAL  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL)
+#define TRUST_NOMINAL_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_NOMINAL, list)
+
+#define TRUST_THREAD  TRUSTED_ATTR(TRUST_KEYWORD_THREAD)
+// Нельзя использовать атрубут thread списком, так как для этого требуется анализ тела функции
+//#define TRUST_THREAD_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_THREAD, list)
+
+#define TRUST_THREADSAFE  TRUSTED_ATTR(TRUST_KEYWORD_THREAD_SAFE)
+#define TRUST_THREADSAFE_TYPES(list)  TRUSTED_ATTR(TRUST_KEYWORD_THREADSAFE, list)
+
+#define TRUST_SET_ATTR_ARGS(...) TRUSTED_ATTR(TRUST_KEYWORD_SET_ATTR_ARGS, __VA_ARGS__)
+
 /**
  * @def TRUSTED_ATTR(...)
  * 
@@ -103,19 +123,6 @@
  * if they are supported by the compiler 
  * and the library semantic analysis plugin is connected
  * 
- */
-
-/**
- * @def TRUSTED_BASELINE(number)
- * 
- * Set the current base line number of [[trust( "baseline", "num" )]] 
- * markers used when debugging the plugin.
- * 
- * If you don't use this macro, the line numbers at the debug marker positions 
- * will match the line numbers in the source file.
- * 
- * Set base line number  is implemented as a set of custom attributes in the 
- * stub function `void trust_stub()` forward declaration, as this can be done anywhere in C++ code.
  */
 
 /**

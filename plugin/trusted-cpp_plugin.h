@@ -137,19 +137,6 @@ namespace trust {
                     });
         }
 
-        //        bool MatchesNameColor(std::string& name, const char *start = "",, const char *stop = "") const {
-        //            if (exact_match_patterns_.count(name)) {
-        //            } else {
-        //            }
-        //            return  ||
-        //                    std::any_of(glob_patterns_.begin(), glob_patterns_.end(),
-        //                    [&name](const std::string & pattern) {
-        //                        return PatternMatchesString(
-        //                                name, pattern.c_str(),
-        //                                pattern.c_str() + pattern.size());
-        //                    });
-        //        }
-
         bool isEmpty() {
             return glob_patterns_.empty() && exact_match_patterns_.empty();
         }
